@@ -22,6 +22,9 @@ func TestParseAreaRef(t *testing.T) {
 		{"нечисловой id", "Wabc", "", 0, true},
 		{"пустой", "", "", 0, true},
 		{"только тип", "W", "", 0, true},
+		{"плюс в id", "W+123", "", 0, true},
+		{"пробел в id", "W 123", "", 0, true},
+		{"минус без цифр", "W-", "", 0, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
