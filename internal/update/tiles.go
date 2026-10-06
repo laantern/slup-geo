@@ -66,7 +66,7 @@ func (u *Updater) extractTiles(ctx context.Context, pbfPath string) error {
 
 	tmpPath := filepath.Join(tmpDir, name)
 	args := []string{
-		pbfPath,
+		"--input", pbfPath,
 		"--output", tmpPath,
 		"--config", u.cfg.TilemakerConfig,
 		"--process", u.cfg.TilemakerProcess,
