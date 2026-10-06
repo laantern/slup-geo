@@ -45,7 +45,7 @@ PostGIS, osm2pgsql и tilemaker — отдельные программы (GPL/F
 | MapLibre GL JS (вендорно: `tiles/web/example/maplibre-gl.js`, v5.24.0) | BSD-3-Clause |
 | pmtiles JS (вендорно: `tiles/web/example/pmtiles.js`, v4.5.0) | BSD-3-Clause |
 | OSM Bright: `tiles/web/style.json` (код) | BSD-3-Clause (MapTiler/Mapbox), см. `tiles/web/LICENSE-osm-bright.md` |
-| OSM Bright: дизайн и спрайт | CC-BY 4.0 (атрибуция на странице с картой) |
+| OSM Bright: дизайн и спрайт | CC-BY 4.0 (атрибуция на странице с картой); файлы спрайта лежат в репозитории, базовым стилем не используются |
 | Шрифты Noto (`tiles/web/fonts`) | SIL OFL 1.1, copyright — в `tiles/web/fonts/NOTICE` |
 
 **Требование атрибуции:** карта на схеме OpenMapTiles должна заметно указывать

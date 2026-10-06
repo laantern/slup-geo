@@ -6,7 +6,7 @@
 | Файл | Что | Лицензия |
 |---|---|---|
 | `style.json` | стиль под схему OpenMapTiles; все ссылки относительные (`/tiles/...`), поэтому работает за любым доменом и прокси без настроек | BSD-3-Clause (код) + CC-BY 4.0 (дизайн), см. `LICENSE-osm-bright.md` |
-| `sprite.json`, `sprite.png`, `sprite@2x.*` | иконки стиля | BSD-3-Clause (код) / CC-BY 4.0 (дизайн) — тот же файл лицензии |
+| `sprite.json`, `sprite.png`, `sprite@2x.*` | иконки стиля; в базовом стиле **не используются** (MapLibre требует абсолютный URL спрайта) — лежат для тех, кто добавит иконки в свой стиль | BSD-3-Clause (код) / CC-BY 4.0 (дизайн) — тот же файл лицензии |
 | `fonts/<fontstack>/<range>.pbf` | глифы Noto (Regular/Bold/Italic) для подписей | SIL OFL 1.1 (см. `fonts/LICENSE` и `fonts/NOTICE`) |
 | `example/` | страница-пример `/example`: MapLibre + pmtiles (вендорные, без CDN), карта, поиск, точка, границы | MapLibre GL JS — BSD-3-Clause; pmtiles JS — BSD-3-Clause |
 
