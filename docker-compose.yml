@@ -4,7 +4,7 @@ services:
   geo:
     build:
       context: .
-    image: ghcr.io/laantern/slup-geo:dev
+    image: aliakseikarpenka/slup-geo:latest
     container_name: slup-geo-dev
     ports:
       # Монолит в dev-окружении смотрит на http://localhost:8083

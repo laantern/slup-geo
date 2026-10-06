@@ -25,6 +25,16 @@
 ## Быстрый старт
 
 ```bash
+# готовый образ из Docker Hub
+docker run -d --name slup-geo -p 8083:8080 \
+  -e PBF_URL=https://download.geofabrik.de/europe/belarus-latest.osm.pbf \
+  -v geo_data:/data \
+  aliakseikarpenka/slup-geo:latest
+```
+
+Или собрать локально из репозитория:
+
+```bash
 docker compose up --build
 ```
 
@@ -34,15 +44,6 @@ docker compose up --build
 ```bash
 curl http://localhost:8083/health
 # {"status":"ok"}
-```
-
-Без compose:
-
-```bash
-docker build -t slup-geo .
-docker run -d --name slup-geo -p 8080:8080 \
-  -e PBF_URL=https://download.geofabrik.de/europe/belarus-latest.osm.pbf \
-  -v geo_data:/data slup-geo
 ```
 
 ### Попробовать
@@ -136,8 +137,8 @@ go test ./...
 ## CI/CD
 
 - Pull request и push в `master`: `go build` / `go vet` / `go test`.
-- Push в `master`: автотег (patch-бамп от последнего `v*`) и публикация образа в Docker Hub
-  (`<DOCKERHUB_USERNAME>/slup-geo:<версия>` и `:latest`).
+- Push в `master`: автотег (patch-бамп от последнего `v*`) и публикация образа в Docker Hub:
+  `aliakseikarpenka/slup-geo:<версия>` и `:latest`.
 - Секреты репозитория: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access token, Read & Write).
 
 ## Лицензия

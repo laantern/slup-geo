@@ -7,7 +7,7 @@
 param(
     [string]$PbfPath = "",
     [string]$PbfUrl = "",
-    [string]$Image = "ghcr.io/laantern/slup-geo:dev",
+    [string]$Image = "aliakseikarpenka/slup-geo:dev",
     [string]$Container = "slup-geo-e2e",
     [int]$Port = 8083,
     [int]$WaitMinutes = 50,
