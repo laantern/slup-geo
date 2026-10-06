@@ -65,6 +65,12 @@ func (f *fakeStore) FindArea(context.Context, string, int64, bool) (*geo.AreaRow
 func (f *fakeStore) Ping(context.Context) error { return f.healthErr }
 
 func newTestRouter(t *testing.T, store *fakeStore, tilesDir string) *http.ServeMux {
+	t.Helper()
+	return newTestRouterWithWeb(t, store, tilesDir, t.TempDir(), true)
+}
+
+func newTestRouterWithWeb(t *testing.T, store *fakeStore, tilesDir, webDir string, exampleEnabled bool) *http.ServeMux {
+	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewRouter(&Handlers{
 		Points:  geo.NewPointService(store),
@@ -73,10 +79,11 @@ func newTestRouter(t *testing.T, store *fakeStore, tilesDir string) *http.ServeM
 		Health:  store,
 		Tiles: &TilesHandler{
 			Dir:    tilesDir,
-			WebDir: t.TempDir(),
+			WebDir: webDir,
 			Log:    log,
 		},
-		Log: log,
+		ExampleEnabled: exampleEnabled,
+		Log:            log,
 	})
 }
 
@@ -396,5 +403,34 @@ func TestFontsAndSpriteEndpoints(t *testing.T) {
 		if recorder := doRequest(t, handler, http.MethodGet, target, nil); recorder.Code != http.StatusNotFound {
 			t.Fatalf("%s: статус = %d, ожидался 404", target, recorder.Code)
 		}
+	}
+}
+
+func TestExamplePage(t *testing.T) {
+	webDir := t.TempDir()
+	exampleDir := filepath.Join(webDir, "example")
+	if err := os.MkdirAll(exampleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	page := `<script src="./maplibre-gl.js"></script>slup-geo example`
+	if err := os.WriteFile(filepath.Join(exampleDir, "index.html"), []byte(page), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	router := newTestRouterWithWeb(t, &fakeStore{}, t.TempDir(), webDir, true)
+
+	recorder := doRequest(t, router, http.MethodGet, "/example", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("статус = %d", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "maplibre-gl.js") {
+		t.Fatalf("страница не отдана: %s", recorder.Body.String())
+	}
+}
+
+func TestExampleDisabled(t *testing.T) {
+	router := newTestRouterWithWeb(t, &fakeStore{}, t.TempDir(), t.TempDir(), false)
+
+	if recorder := doRequest(t, router, http.MethodGet, "/example", nil); recorder.Code != http.StatusNotFound {
+		t.Fatalf("статус = %d, ожидался 404", recorder.Code)
 	}
 }

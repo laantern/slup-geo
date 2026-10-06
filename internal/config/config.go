@@ -45,6 +45,8 @@ type Config struct {
 
 	// WebDir — каталог веб-ассетов карты: стиль, спрайт, глифы.
 	WebDir string
+	// ExampleEnabled — отдавать страницу-пример /example (удобно в dev; в проде можно выключить).
+	ExampleEnabled bool
 
 	// ImportProcesses — число процессов osm2pgsql.
 	ImportProcesses int
@@ -94,6 +96,9 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	if cfg.TilesEnabled, err = envBool("TILES_ENABLED", true); err != nil {
+		return Config{}, err
+	}
+	if cfg.ExampleEnabled, err = envBool("ENABLE_EXAMPLE", true); err != nil {
 		return Config{}, err
 	}
 

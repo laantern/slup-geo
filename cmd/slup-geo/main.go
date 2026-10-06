@@ -117,7 +117,8 @@ func serve(cfg config.Config, log *slog.Logger) error {
 			WebDir: cfg.WebDir,
 			Log:    log,
 		},
-		Log: log,
+		ExampleEnabled: cfg.ExampleEnabled,
+		Log:            log,
 	}
 
 	server := &http.Server{

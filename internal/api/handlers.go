@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"strconv"
 
 	"github.com/laantern/slup-geo/internal/geo"
@@ -22,7 +23,9 @@ type Handlers struct {
 	Areas   *geo.AreaService
 	Health  HealthChecker
 	Tiles   *TilesHandler
-	Log     *slog.Logger
+	// ExampleEnabled — отдавать страницу-пример /example.
+	ExampleEnabled bool
+	Log            *slog.Logger
 }
 
 // NewRouter собирает маршруты сервиса.
@@ -33,6 +36,13 @@ func NewRouter(h *Handlers) *http.ServeMux {
 	mux.HandleFunc("GET /v1/suggest", h.suggest)
 	mux.HandleFunc("GET /v1/areas/{id}", h.area)
 	mux.Handle("GET /tiles/", h.Tiles)
+	if h.ExampleEnabled {
+		exampleDir := filepath.Join(h.Tiles.WebDir, "example")
+		mux.Handle("GET /example/", http.StripPrefix("/example/", http.FileServer(http.Dir(exampleDir))))
+		mux.HandleFunc("GET /example", func(w http.ResponseWriter, r *http.Request) {
+			http.ServeFile(w, r, filepath.Join(exampleDir, "index.html"))
+		})
+	}
 	return mux
 }
 

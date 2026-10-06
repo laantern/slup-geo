@@ -76,6 +76,7 @@ services:
       # UPDATE_SCHEDULE: "0 4 * * 1"                 # cron обновлений (пусто = выключено)
       # TILES_ENABLED: "true"                        # собирать подложку из PBF (tilemaker)
       # TILEMAKER_THREADS: "0"                       # потоков tilemaker (0 = авто)
+      # ENABLE_EXAMPLE: "true"                       # страница-пример /example (в проде можно выключить)
       # IMPORT_PROCESSES: "4"                        # процессов osm2pgsql
       # DATA_DIR: /data                              # БД, PBF, тайлы, состояние
       # HTTP_ADDR: ":8080"
@@ -93,6 +94,9 @@ volumes:
 ```bash
 curl http://localhost:8080/health
 ```
+
+После старта откройте **http://localhost:8080/example** — страница-пример с картой и поиском
+(её можно выключить в проде: `ENABLE_EXAMPLE=false`).
 
 ### Попробовать
 
@@ -148,6 +152,7 @@ Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `N
 | `/tiles/basemap-*.pmtiles` | PMTiles | версионные файлы (immutable, для CDN) |
 | `/tiles/style.json` | MapLibre Style JSON | готовый стиль под схему OpenMapTiles (ссылки подставляются сервисом) |
 | `/tiles/sprite*`, `/tiles/fonts/...` | спрайт и глифы Noto | иконки и шрифты для стиля |
+| `/example` | HTML-страница | готовый пример: карта, поиск, точка, границы (выключается `ENABLE_EXAMPLE=false`) |
 
 В стиле все ссылки **относительные** (`/tiles/...`): он работает за любым доменом, nginx и CDN
 без единой настройки — при условии, что страница и `/tiles/*` на одном origin (обычная схема,
@@ -179,6 +184,7 @@ const map = new maplibregl.Map({
 | `UPDATE_ON_START` | `false` | Обновлять данные при каждом старте контейнера |
 | `UPDATE_SCHEDULE` | пусто (выключено) | Cron-расписание обновлений, например `0 4 * * 1` |
 | `TILES_ENABLED` | `true` | Собирать векторную подложку из PBF (tilemaker) |
+| `ENABLE_EXAMPLE` | `true` | Отдавать страницу-пример `/example` (в проде можно выключить) |
 | `TILEMAKER_THREADS` | `0` (авто) | Потоков tilemaker при сборке тайлов |
 | `TILEMAKER_CONFIG` / `TILEMAKER_PROCESS` | профиль OpenMapTiles из образа | Пути к конфигу слоёв и Lua-профилю |
 | `IMPORT_PROCESSES` | число CPU | Процессов `osm2pgsql` при импорте |

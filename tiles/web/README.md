@@ -8,6 +8,7 @@
 | `style.json` | стиль под схему OpenMapTiles; все ссылки относительные (`/tiles/...`), поэтому работает за любым доменом и прокси без настроек | BSD-3-Clause (код) + CC-BY 4.0 (дизайн), см. `LICENSE-osm-bright.md` |
 | `sprite.json`, `sprite.png`, `sprite@2x.*` | иконки стиля | BSD-3-Clause (код) / CC-BY 4.0 (дизайн) — тот же файл лицензии |
 | `fonts/<fontstack>/<range>.pbf` | глифы Noto (Regular/Bold/Italic) для подписей | SIL OFL 1.1 (см. `fonts/LICENSE` и `fonts/NOTICE`) |
+| `example/` | страница-пример `/example`: MapLibre + pmtiles (вендорные, без CDN), карта, поиск, точка, границы | MapLibre GL JS — BSD-3-Clause; pmtiles JS — BSD-3-Clause |
 
 **Обязательная атрибуция.** Продукты, использующие карту на схеме OpenMapTiles, должны заметно
 указывать «OpenMapTiles» со ссылкой на https://openmaptiles.org/ — например, в углу карты:
