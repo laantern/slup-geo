@@ -108,6 +108,13 @@ Show "areas: MultiPolygon" ($a.geometry.type -in @("Polygon", "MultiPolygon")) $
 
 $tiles = Invoke-RestMethod "$base/tiles/tiles.json"
 Show "tiles: манифест" ($null -ne $tiles.files) ($tiles | ConvertTo-Json -Compress)
+if ($tiles.files.Count -gt 0) {
+    $tileName = $tiles.files[0].name
+    $magic = (& curl.exe -s -r 0-6 "$base/tiles/$tileName")
+    Show "tiles: архив PMTiles (Range)" ($magic -eq "PMTiles") "magic=$magic"
+} else {
+    Show "tiles: архив PMTiles (Range)" $false "манифест пуст"
+}
 
 # Данные должны переживать пересоздание контейнера: БД и тайлы лежат в /data (volume).
 docker rm -f $Container | Out-Null
