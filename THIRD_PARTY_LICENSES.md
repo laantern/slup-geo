@@ -38,11 +38,11 @@ PostGIS, osm2pgsql и tilemaker — отдельные программы (GPL/F
 | Профиль tilemaker (`tiles/config-openmaptiles.json`, `tiles/process-openmaptiles.lua`) | FTWPL (tilemaker) | Взято из tilemaker v3.2.0; из конфига удалены слои, требующие внешних shapefile-датасетов |
 | Схема OpenMapTiles | BSD-3-Clause | Имена слоёв/полей в тайлах |
 
-## Стиль и фронтенд (следующий этап)
+## Стиль и фронтенд
 
 | Компонент | Лицензия |
 |---|---|
 | MapLibre GL JS | BSD-3-Clause |
 | pmtiles JS | BSD-3-Clause |
-| OSM Bright (основа стиля) | BSD-3-Clause (MapTiler/Mapbox) |
-| Шрифты Noto (глифы) | SIL OFL 1.1 |
+| OSM Bright (`tiles/web/style.json.template`, спрайт) | BSD-3-Clause (MapTiler/Mapbox), см. `tiles/web/LICENSE-osm-bright.md` |
+| Шрифты Noto (`tiles/web/fonts`) | SIL OFL 1.1, см. `tiles/web/fonts/LICENSE` |

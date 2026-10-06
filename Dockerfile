@@ -43,7 +43,8 @@ RUN apt-get update \
 
 COPY --from=build /out/slup-geo /usr/local/bin/slup-geo
 COPY --from=tilemaker-build /out-tilemaker /usr/local/bin/tilemaker
-COPY tiles/ /usr/local/share/tilemaker/
+COPY tiles/tilemaker/ /usr/local/share/tilemaker/
+COPY tiles/web/ /usr/local/share/slup-geo/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 

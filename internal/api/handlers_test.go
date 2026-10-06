@@ -64,15 +64,19 @@ func (f *fakeStore) FindArea(context.Context, string, int64, bool) (*geo.AreaRow
 
 func (f *fakeStore) Ping(context.Context) error { return f.healthErr }
 
-func newTestRouter(store *fakeStore, tilesDir string) *http.ServeMux {
+func newTestRouter(t *testing.T, store *fakeStore, tilesDir string) *http.ServeMux {
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewRouter(&Handlers{
 		Points:  geo.NewPointService(store),
 		Suggest: geo.NewSuggestService(store),
 		Areas:   geo.NewAreaService(store),
 		Health:  store,
-		Tiles:   &TilesHandler{Dir: tilesDir, Log: log},
-		Log:     log,
+		Tiles: &TilesHandler{
+			Dir:    tilesDir,
+			WebDir: t.TempDir(),
+			Log:    log,
+		},
+		Log: log,
 	})
 }
 
@@ -88,7 +92,7 @@ func doRequest(t *testing.T, router http.Handler, method, target string, headers
 }
 
 func TestPointEndpoint(t *testing.T) {
-	router := newTestRouter(&fakeStore{
+	router := newTestRouter(t, &fakeStore{
 		house: &geo.House{ID: "W1", Housenumber: strPtr("22"), Street: strPtr("улица Григория Денисенко"), AreaM2: 1460},
 		zones: []geo.ZoneRow{{ID: "W2", Name: "Гомель", Level: geo.LevelCity, Kind: geo.KindAdmin, AreaM2: 100}},
 	}, t.TempDir())
@@ -118,7 +122,7 @@ func TestPointEndpoint(t *testing.T) {
 }
 
 func TestPointEndpointValidation(t *testing.T) {
-	router := newTestRouter(&fakeStore{}, t.TempDir())
+	router := newTestRouter(t, &fakeStore{}, t.TempDir())
 
 	for _, target := range []string{"/v1/point?lon=31.0", "/v1/point?lat=abc&lon=31.0", "/v1/point?lat=200&lon=31.0"} {
 		recorder := doRequest(t, router, http.MethodGet, target, nil)
@@ -132,7 +136,7 @@ func TestPointEndpointValidation(t *testing.T) {
 }
 
 func TestPointEndpointStoreFailure(t *testing.T) {
-	router := newTestRouter(&fakeStore{pointErr: errors.New("db down")}, t.TempDir())
+	router := newTestRouter(t, &fakeStore{pointErr: errors.New("db down")}, t.TempDir())
 
 	recorder := doRequest(t, router, http.MethodGet, "/v1/point?lat=52.4&lon=31.0", nil)
 	if recorder.Code != http.StatusInternalServerError {
@@ -141,7 +145,7 @@ func TestPointEndpointStoreFailure(t *testing.T) {
 }
 
 func TestSuggestEndpoint(t *testing.T) {
-	router := newTestRouter(&fakeStore{
+	router := newTestRouter(t, &fakeStore{
 		streets: []geo.StreetMatch{{
 			OSMID: 1, Label: "улица Бородина", NameNorm: "бородина", MatchRank: 3, Similarity: 1.0,
 			Lat: 52.4, Lon: 31.0,
@@ -178,7 +182,7 @@ func TestSuggestEndpoint(t *testing.T) {
 }
 
 func TestSuggestEndpointShortQuery(t *testing.T) {
-	router := newTestRouter(&fakeStore{}, t.TempDir())
+	router := newTestRouter(t, &fakeStore{}, t.TempDir())
 
 	recorder := doRequest(t, router, http.MethodGet, "/v1/suggest?q=%D1%8F", nil)
 	if recorder.Code != http.StatusBadRequest {
@@ -187,7 +191,7 @@ func TestSuggestEndpointShortQuery(t *testing.T) {
 }
 
 func TestAreaEndpoint(t *testing.T) {
-	router := newTestRouter(&fakeStore{areaRow: &geo.AreaRow{
+	router := newTestRouter(t, &fakeStore{areaRow: &geo.AreaRow{
 		ID: "W-1", Name: "Советский район", Level: geo.LevelCityDistrict, Kind: geo.KindAdmin,
 		AreaM2: 50_910_791, Geometry: []byte(`{"type":"Polygon","coordinates":[]}`),
 	}}, t.TempDir())
@@ -209,7 +213,7 @@ func TestAreaEndpoint(t *testing.T) {
 }
 
 func TestAreaEndpointErrors(t *testing.T) {
-	router := newTestRouter(&fakeStore{}, t.TempDir())
+	router := newTestRouter(t, &fakeStore{}, t.TempDir())
 
 	if recorder := doRequest(t, router, http.MethodGet, "/v1/areas/X1", nil); recorder.Code != http.StatusBadRequest {
 		t.Fatalf("невалидный id: статус = %d, ожидался 400", recorder.Code)
@@ -220,12 +224,12 @@ func TestAreaEndpointErrors(t *testing.T) {
 }
 
 func TestHealthEndpoint(t *testing.T) {
-	router := newTestRouter(&fakeStore{}, t.TempDir())
+	router := newTestRouter(t, &fakeStore{}, t.TempDir())
 	if recorder := doRequest(t, router, http.MethodGet, "/health", nil); recorder.Code != http.StatusOK {
 		t.Fatalf("статус = %d, ожидался 200", recorder.Code)
 	}
 
-	router = newTestRouter(&fakeStore{healthErr: errors.New("db down")}, t.TempDir())
+	router = newTestRouter(t, &fakeStore{healthErr: errors.New("db down")}, t.TempDir())
 	if recorder := doRequest(t, router, http.MethodGet, "/health", nil); recorder.Code != http.StatusServiceUnavailable {
 		t.Fatalf("статус = %d, ожидался 503", recorder.Code)
 	}
@@ -238,7 +242,7 @@ func TestTilesRangeAndHeaders(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, name), payload, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	router := newTestRouter(&fakeStore{}, dir)
+	router := newTestRouter(t, &fakeStore{}, dir)
 
 	recorder := doRequest(t, router, http.MethodGet, "/tiles/"+name, map[string]string{"Range": "bytes=0-6"})
 	if recorder.Code != http.StatusPartialContent {
@@ -281,7 +285,7 @@ func TestTilesWhitelist(t *testing.T) {
 	}
 
 	// Через роутер: несуществующий простой файл — 404.
-	router := newTestRouter(&fakeStore{}, dir)
+	router := newTestRouter(t, &fakeStore{}, dir)
 	if recorder := doRequest(t, router, http.MethodGet, "/tiles/nofile.pmtiles", nil); recorder.Code != http.StatusNotFound {
 		t.Fatalf("статус = %d, ожидался 404", recorder.Code)
 	}
@@ -289,7 +293,7 @@ func TestTilesWhitelist(t *testing.T) {
 
 func TestTilesManifestFallbackAndFile(t *testing.T) {
 	dir := t.TempDir()
-	router := newTestRouter(&fakeStore{}, dir)
+	router := newTestRouter(t, &fakeStore{}, dir)
 
 	recorder := doRequest(t, router, http.MethodGet, "/tiles/tiles.json", nil)
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"files":[]`) {
@@ -307,5 +311,90 @@ func TestTilesManifestFallbackAndFile(t *testing.T) {
 	recorder = doRequest(t, router, http.MethodGet, "/tiles/tiles.json", nil)
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), "basemap-1.pmtiles") {
 		t.Fatalf("манифест: статус = %d, тело = %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func newTilesHandler(t *testing.T, tilesDir string) *TilesHandler {
+	t.Helper()
+	return &TilesHandler{
+		Dir:    tilesDir,
+		WebDir: t.TempDir(),
+		Log:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+func TestStyleEndpointServesRelativeStyle(t *testing.T) {
+	handler := newTilesHandler(t, t.TempDir())
+	style := `{"sources":{"openmaptiles":{"url":"pmtiles:///tiles/basemap.pmtiles"}},` +
+		`"glyphs":"/tiles/fonts/{fontstack}/{range}.pbf","sprite":"/tiles/sprite"}`
+	if err := os.WriteFile(filepath.Join(handler.WebDir, "style.json"), []byte(style), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	recorder := doRequest(t, handler, http.MethodGet, "/tiles/style.json", nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("статус = %d", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, "pmtiles:///tiles/basemap.pmtiles") {
+		t.Fatalf("нет относительного источника: %s", body)
+	}
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+		t.Fatalf("cache-control = %s", cacheControl)
+	}
+}
+
+func TestTilesAliasServesCurrentFile(t *testing.T) {
+	dir := t.TempDir()
+	oldPayload := []byte("PMTiles-old-payload")
+	newPayload := []byte("PMTiles-new-payload")
+	if err := os.WriteFile(filepath.Join(dir, "basemap-20260101T000000Z.pmtiles"), oldPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "basemap-20261006T120000Z.pmtiles"), newPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handler := newTilesHandler(t, dir)
+
+	recorder := doRequest(t, handler, http.MethodGet, "/tiles/basemap.pmtiles", map[string]string{"Range": "bytes=0-11"})
+	if recorder.Code != http.StatusPartialContent {
+		t.Fatalf("статус = %d, ожидался 206", recorder.Code)
+	}
+	if recorder.Body.String() != "PMTiles-new-" {
+		t.Fatalf("отдан не актуальный файл: %q", recorder.Body.String())
+	}
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+		t.Fatalf("cache-control = %s", cacheControl)
+	}
+}
+
+func TestFontsAndSpriteEndpoints(t *testing.T) {
+	handler := newTilesHandler(t, t.TempDir())
+	fontDir := filepath.Join(handler.WebDir, "fonts", "Noto Sans Regular")
+	if err := os.MkdirAll(fontDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fontDir, "0-255.pbf"), []byte{0x0A, 0x01}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(handler.WebDir, "sprite.json"), []byte(`{"sprite":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if recorder := doRequest(t, handler, http.MethodGet, "/tiles/fonts/Noto%20Sans%20Regular/0-255.pbf", nil); recorder.Code != http.StatusOK {
+		t.Fatalf("глифы: статус = %d", recorder.Code)
+	}
+	if recorder := doRequest(t, handler, http.MethodGet, "/tiles/sprite.json", nil); recorder.Code != http.StatusOK {
+		t.Fatalf("спрайт: статус = %d", recorder.Code)
+	}
+	for _, target := range []string{
+		"/tiles/fonts/Noto%20Sans%20Regular/x.pbf",
+		"/tiles/fonts/Bad!Stack/0-255.pbf",
+		"/tiles/fonts/../../../etc/passwd",
+		"/tiles/sprite.bmp",
+	} {
+		if recorder := doRequest(t, handler, http.MethodGet, target, nil); recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s: статус = %d, ожидался 404", target, recorder.Code)
+		}
 	}
 }

@@ -116,6 +116,15 @@ if ($tiles.files.Count -gt 0) {
     Show "tiles: архив PMTiles (Range)" $false "манифест пуст"
 }
 
+$style = Invoke-RestMethod "$base/tiles/style.json"
+Show "tiles: стиль с относительным источником" ($style.sources.openmaptiles.url -eq "pmtiles:///tiles/basemap.pmtiles") ($style.sources.openmaptiles.url)
+
+$aliasMagic = (& curl.exe -s -r 0-6 "$base/tiles/basemap.pmtiles")
+Show "tiles: алиас basemap.pmtiles" ($aliasMagic -eq "PMTiles") "magic=$aliasMagic"
+
+$fontCode = (& curl.exe -s -o NUL -w "%{http_code}" "$base/tiles/fonts/Noto%20Sans%20Regular/0-255.pbf")
+Show "tiles: глифы" ($fontCode -eq "200") "http=$fontCode"
+
 # Данные должны переживать пересоздание контейнера: БД и тайлы лежат в /data (volume).
 docker rm -f $Container | Out-Null
 docker run -d --name $Container -p "${Port}:8080" -v "${volume}:/data" $Image | Out-Null

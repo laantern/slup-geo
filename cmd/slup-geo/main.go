@@ -112,8 +112,12 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		Suggest: geo.NewSuggestService(store),
 		Areas:   geo.NewAreaService(store),
 		Health:  pool,
-		Tiles:   &api.TilesHandler{Dir: cfg.TilesDir(), Log: log},
-		Log:     log,
+		Tiles: &api.TilesHandler{
+			Dir:    cfg.TilesDir(),
+			WebDir: cfg.WebDir,
+			Log:    log,
+		},
+		Log: log,
 	}
 
 	server := &http.Server{

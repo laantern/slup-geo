@@ -43,6 +43,9 @@ type Config struct {
 	// TilemakerThreads — число потоков tilemaker (0 — авто).
 	TilemakerThreads int
 
+	// WebDir — каталог веб-ассетов карты: стиль, спрайт, глифы.
+	WebDir string
+
 	// ImportProcesses — число процессов osm2pgsql.
 	ImportProcesses int
 
@@ -79,6 +82,8 @@ func Load() (Config, error) {
 		TilemakerConfig:  env("TILEMAKER_CONFIG", "/usr/local/share/tilemaker/config-openmaptiles.json"),
 		TilemakerProcess: env("TILEMAKER_PROCESS", "/usr/local/share/tilemaker/process-openmaptiles.lua"),
 		TilemakerThreads: envInt("TILEMAKER_THREADS", 0),
+
+		WebDir: env("WEB_DIR", "/usr/local/share/slup-geo"),
 
 		ImportProcesses: envInt("IMPORT_PROCESSES", runtime.NumCPU()),
 		ShutdownTimeout: time.Duration(envInt("SHUTDOWN_TIMEOUT_SECONDS", 15)) * time.Second,
