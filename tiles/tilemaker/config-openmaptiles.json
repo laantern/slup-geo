@@ -33,16 +33,17 @@
 		"basezoom": 14,
 		"include_ids": false,
 		"combine_below": 14,
-		"name": "Tilemaker to OpenMapTiles schema",
+		"name": "slup-geo basemap (OpenMapTiles schema)",
 		"version": "3.0",
-		"description": "Tile config based on OpenMapTiles schema",
+		"description": "Векторные тайлы OpenStreetMap по схеме OpenMapTiles",
+		"attribution": "© OpenMapTiles · © OpenStreetMap contributors",
 		"compress": "gzip",
 		"filemetadata": {
-			"tilejson": "2.0.0", 
-			"scheme": "xyz", 
-			"type": "baselayer", 
-			"format": "pbf", 
-            "tiles": ["https://example.com/liechtenstein/{z}/{x}/{y}.pbf"]
+			"tilejson": "2.0.0",
+			"scheme": "xyz",
+			"type": "baselayer",
+			"format": "pbf",
+			"attribution": "© OpenMapTiles · © OpenStreetMap contributors"
 		}
 	}
 }
