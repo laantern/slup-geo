@@ -90,6 +90,36 @@ curl 'http://localhost:8083/tiles/tiles.json'
 Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_SERVER_ERROR`).
 Полная спецификация — [openapi.yaml](openapi.yaml).
 
+## Подключение карты (фронтенд)
+
+Сервис отдаёт тайлы в формате **[PMTiles](https://github.com/protomaps/PMTiles)** — один
+файл-архив; внутри — векторные тайлы **[Mapbox Vector Tile v2](https://github.com/mapbox/vector-tile-spec)**
+в схеме **[OpenMapTiles](https://openmaptiles.org/schema/)**. Фронтенд рисует их библиотекой
+**[MapLibre GL JS](https://maplibre.org/)** с плагином **pmtiles** и стилем по
+**[MapLibre Style Specification](https://maplibre.org/maplibre-style-spec/)**.
+
+| URL | Формат | Назначение |
+|---|---|---|
+| `/tiles/tiles.json` | JSON (манифест сервиса) | какой файл тайлов актуален |
+| `/tiles/basemap-*.pmtiles` | PMTiles (внутри MVT, схема OpenMapTiles) | данные карты (Range-запросы) |
+| `/tiles/style.json` | MapLibre Style JSON | готовый стиль под схему OpenMapTiles (следующий этап) |
+
+Схема подключения (стиль — свой или готовый из сервиса, когда появится):
+
+```js
+import maplibregl from 'maplibre-gl';
+import { Protocol } from 'pmtiles';
+
+maplibregl.addProtocol('pmtiles', new Protocol().tile);
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: '/tiles/style.json',
+});
+```
+
+Атрибуция обязательна при показе карты: «© OpenStreetMap contributors».
+
 ## Конфигурация
 
 | Переменная | По умолчанию | Описание |
