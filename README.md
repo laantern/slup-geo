@@ -24,16 +24,6 @@
 
 ## Быстрый старт
 
-Скопируйте `docker-compose.yml` из репозитория (или блок ниже) и запустите:
-
-```bash
-docker compose up -d
-docker compose logs -f geo   # первый импорт: скачивание PBF + osm2pgsql, несколько минут
-curl http://localhost:8083/health
-# {"status":"ok"}
-```
-
-Пока идёт первый импорт, сервис ещё не слушает порт — дождитесь `{"status":"ok"}`.
 Пример со всеми переменными: обязательное отмечено, остальное — значения по умолчанию.
 
 ```yaml
@@ -41,8 +31,6 @@ services:
   geo:
     image: aliakseikarpenka/slup-geo:latest
     restart: unless-stopped
-    ports:
-      - "8083:8080"   # с хоста; в docker-сети монолит ходит на http://geo:8080
     environment:
       # ОБЯЗАТЕЛЬНОЕ, если нет локального PBF
       PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
@@ -59,10 +47,6 @@ services:
       # DATA_DIR: /data                              # БД, PBF, тайлы, состояние
       # HTTP_ADDR: ":8080"
       # LOG_LEVEL: info                              # debug | info | warn | error
-
-      # ВНУТРЕННЯЯ БД (менять не нужно): креды генерируются при первом старте
-      # DATABASE_URL: postgres://geo_user:geo_password@127.0.0.1:5432/geo_db
-      # PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE
     volumes:
       - geo_data:/data
 
@@ -181,7 +165,6 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 - Pull request и push в `master`: `go build` / `go vet` / `go test`.
 - Push в `master`: автотег (patch-бамп от последнего `v*`) и публикация образа в Docker Hub:
   `aliakseikarpenka/slup-geo:<версия>` и `:latest`.
-- Секреты репозитория: `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` (access token, Read & Write).
 
 ## Лицензия
 
