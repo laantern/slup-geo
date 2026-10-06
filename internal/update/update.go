@@ -31,11 +31,20 @@ type TileFile struct {
 
 // State — состояние данных сервиса (маркер завершённого обновления).
 type State struct {
-	ImportedAt time.Time  `json:"importedAt"`
-	PBF        string     `json:"pbf"`
-	PBFBytes   int64      `json:"pbfBytes"`
-	PBFURL     string     `json:"pbfUrl,omitempty"`
-	Tiles      []TileFile `json:"tiles"`
+	ImportedAt    time.Time  `json:"importedAt"`
+	PBF           string     `json:"pbf"`
+	PBFBytes      int64      `json:"pbfBytes"`
+	PBFURL        string     `json:"pbfUrl,omitempty"`
+	Tiles         []TileFile `json:"tiles"`
+	SchemaVersion int        `json:"schemaVersion"`
+}
+
+// Status — состояние последней попытки обновления (для /health и /status).
+type Status struct {
+	State      string     `json:"state"` // running | ok | error
+	StartedAt  time.Time  `json:"startedAt"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // Updater выполняет полный цикл обновления данных.
@@ -49,12 +58,15 @@ func New(cfg config.Config, log *slog.Logger) *Updater {
 	return &Updater{cfg: cfg, log: log}
 }
 
-// Run выполняет обновление: расширения → PBF → импорт → представления → тайлы → маркер.
+// Run выполняет обновление: расширения → PBF → тайлы → staging-импорт → замена таблиц
+// и представлений → публикация тайлов → маркер. Рабочие данные не трогаются до успешной
+// замены: сбой на любом шаге оставляет прежние таблицы и матвью на месте.
 func (u *Updater) Run(ctx context.Context) (err error) {
 	started := time.Now()
 	if err := u.prepareDirs(); err != nil {
 		return err
 	}
+	defer os.RemoveAll(u.cfg.TmpDir()) // промежуточные данные tilemaker
 
 	pool, err := db.Connect(ctx, u.cfg.DatabaseDSN)
 	if err != nil {
@@ -67,6 +79,24 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 		return err
 	}
 	defer unlock()
+
+	status := Status{State: "running", StartedAt: time.Now().UTC()}
+	if err := u.writeStatus(status); err != nil {
+		u.log.Warn("не удалось записать статус обновления", "error", err)
+	}
+	defer func() {
+		finished := time.Now().UTC()
+		status.FinishedAt = &finished
+		if err != nil {
+			status.State = "error"
+			status.Error = err.Error()
+		} else {
+			status.State = "ok"
+		}
+		if werr := u.writeStatus(status); werr != nil {
+			u.log.Warn("не удалось записать статус обновления", "error", werr)
+		}
+	}()
 
 	extensions, err := schema.Extensions()
 	if err != nil {
@@ -89,28 +119,35 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 	}
 	u.log.Info("PBF готов", "файл", pbf.path, "байт", pbf.size, "скачан", pbf.downloaded)
 
+	// Тайлы собираются до замены таблиц: сбой tilemaker не должен оставить
+	// новые данные БД со старыми тайлами.
+	built, err := u.buildTiles(ctx, pbf.path)
+	if err != nil {
+		return fmt.Errorf("сборка тайлов: %w", err)
+	}
+
 	if err := u.importOSM(ctx, pbf.path); err != nil {
 		return fmt.Errorf("импорт OSM: %w", err)
 	}
-
-	if err := db.ExecScripts(ctx, u.cfg.DatabaseDSN, views...); err != nil {
-		return fmt.Errorf("представления geo: %w", err)
+	if err := u.swapPlanetTables(ctx, views...); err != nil {
+		return err
 	}
 	if _, err := pool.Exec(ctx, "ANALYZE geo.zones, geo.streets, geo.addresses, geo.names"); err != nil {
 		return fmt.Errorf("analyze матвью: %w", err)
 	}
 
-	tiles, err := u.buildTiles(ctx, pbf.path)
+	tiles, err := u.publishTiles(built)
 	if err != nil {
-		return fmt.Errorf("сборка тайлов: %w", err)
+		return fmt.Errorf("публикация тайлов: %w", err)
 	}
 
 	state := State{
-		ImportedAt: time.Now().UTC(),
-		PBF:        pbf.path,
-		PBFBytes:   pbf.size,
-		PBFURL:     u.cfg.PBFURL,
-		Tiles:      tiles,
+		ImportedAt:    time.Now().UTC(),
+		PBF:           pbf.path,
+		PBFBytes:      pbf.size,
+		PBFURL:        redactURL(u.cfg.PBFURL),
+		Tiles:         tiles,
+		SchemaVersion: schema.Version,
 	}
 	if err := u.writeState(state); err != nil {
 		return fmt.Errorf("запись состояния: %w", err)
@@ -162,10 +199,16 @@ func (u *Updater) lock(ctx context.Context, pool *pgxpool.Pool) (func(), error) 
 
 // writeState атомарно пишет маркер состояния (temp + rename).
 func (u *Updater) writeState(state State) error {
-	return writeJSONAtomic(u.cfg.StatePath(), state)
+	return writeJSONAtomic(u.cfg.StatePath(), state, 0o600)
 }
 
-func writeJSONAtomic(path string, value any) error {
+// writeStatus атомарно пишет статус последней попытки обновления.
+func (u *Updater) writeStatus(status Status) error {
+	return writeJSONAtomic(u.cfg.StatusPath(), status, 0o600)
+}
+
+// writeJSONAtomic пишет JSON атомарно (temp + fsync + rename + fsync каталога).
+func writeJSONAtomic(path string, value any, perm os.FileMode) error {
 	payload, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
@@ -173,11 +216,31 @@ func writeJSONAtomic(path string, value any) error {
 	payload = append(payload, '\n')
 
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+	file, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := file.Write(payload); err != nil {
+		file.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
 		return err
+	}
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
 	}
 	return nil
 }

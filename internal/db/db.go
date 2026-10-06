@@ -30,6 +30,32 @@ func Connect(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	return pool, nil
 }
 
+// ConnectServe открывает пул для HTTP-сервиса: к общим настройкам добавляются
+// ограничения времени выполнения запросов, чтобы зависший запрос не держал соединение.
+func ConnectServe(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, fmt.Errorf("разбор строки подключения: %w", err)
+	}
+	cfg.MaxConns = 10
+	cfg.MaxConnLifetime = time.Hour
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	cfg.ConnConfig.RuntimeParams["statement_timeout"] = "15000"
+	cfg.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "30000"
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("создание пула соединений: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("проверка подключения: %w", err)
+	}
+	return pool, nil
+}
+
 // ExecScripts выполняет SQL-скрипты целиком (несколько инструкций в одном скрипте).
 // Для этого используется отдельное соединение в simple protocol.
 func ExecScripts(ctx context.Context, dsn string, scripts ...string) error {
@@ -51,4 +77,10 @@ func ExecScripts(ctx context.Context, dsn string, scripts ...string) error {
 		}
 	}
 	return nil
+}
+
+// ExecScript выполняет один SQL-скрипт в simple protocol (внутри него могут быть
+// BEGIN/COMMIT и несколько инструкций).
+func ExecScript(ctx context.Context, dsn string, script string) error {
+	return ExecScripts(ctx, dsn, script)
 }

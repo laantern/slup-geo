@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +35,9 @@ var (
 )
 
 func main() {
+	cmd := command()
+	applyPasswordFallback(cmd)
+
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка конфигурации:", err)
@@ -41,7 +46,7 @@ func main() {
 
 	log := newLogger()
 
-	switch command() {
+	switch cmd {
 	case "serve":
 		if err := serve(cfg, log); err != nil {
 			log.Error("serve завершился с ошибкой", "error", err)
@@ -59,6 +64,45 @@ func main() {
 	default:
 		fmt.Fprintln(os.Stderr, "использование: slup-geo <serve|update|version>")
 		os.Exit(2)
+	}
+}
+
+// applyPasswordFallback позволяет запускать slup-geo через docker exec без явных кредов:
+// entrypoint сохраняет пароли ролей в volume (state/db_password_owner и т.п.).
+func applyPasswordFallback(cmd string) {
+	if os.Getenv("DATABASE_URL") != "" || strings.TrimSpace(os.Getenv("PGPASSWORD")) != "" {
+		return
+	}
+
+	type creds struct{ user, file string }
+	var candidates []creds
+	switch cmd {
+	case "update":
+		candidates = []creds{{"geo_owner", "db_password_owner"}, {"geo_user", "db_password"}}
+	case "serve":
+		candidates = []creds{{"geo_reader", "db_password_reader"}, {"geo_user", "db_password"}}
+	default:
+		candidates = []creds{{"geo_user", "db_password"}}
+	}
+
+	dataDir := os.Getenv("DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/data"
+	}
+	for _, candidate := range candidates {
+		data, err := os.ReadFile(filepath.Join(dataDir, "state", candidate.file))
+		if err != nil {
+			continue
+		}
+		password := strings.TrimSpace(string(data))
+		if password == "" {
+			continue
+		}
+		_ = os.Setenv("PGPASSWORD", password)
+		if current := os.Getenv("PGUSER"); current == "" || current == "geo_user" {
+			_ = os.Setenv("PGUSER", candidate.user)
+		}
+		return
 	}
 }
 
@@ -86,7 +130,7 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	pool, err := db.Connect(ctx, cfg.DatabaseDSN)
+	pool, err := db.ConnectServe(ctx, cfg.DatabaseDSN)
 	if err != nil {
 		return fmt.Errorf("подключение к БД: %w", err)
 	}
@@ -99,23 +143,31 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		}
 	}
 
-	var initialized bool
-	if err := pool.QueryRow(ctx, "SELECT to_regclass('geo.zones') IS NOT NULL").Scan(&initialized); err != nil {
+	store := geo.NewPGStore(pool)
+	initialized, err := store.SchemaReady(ctx)
+	if err != nil {
 		log.Warn("не удалось проверить схему geo", "error", err)
 	} else if !initialized {
 		log.Warn("схема geo не инициализирована — выполните slup-geo update или дождитесь первого импорта")
+	} else if dataVersion, err := store.SchemaVersion(ctx); err == nil && dataVersion != schema.Version {
+		log.Warn("версия схемы данных не совпадает с версией сервиса — выполните slup-geo update",
+			"данные", dataVersion, "сервис", schema.Version)
 	}
 
-	store := geo.NewPGStore(pool)
 	handlers := &api.Handlers{
 		Points:  geo.NewPointService(store),
 		Suggest: geo.NewSuggestService(store),
 		Areas:   geo.NewAreaService(store),
-		Health:  pool,
+		Health:  store,
 		Tiles: &api.TilesHandler{
 			Dir:    cfg.TilesDir(),
 			WebDir: cfg.WebDir,
 			Log:    log,
+		},
+		Meta: api.Meta{
+			StatePath:  cfg.StatePath(),
+			StatusPath: cfg.StatusPath(),
+			Version:    version,
 		},
 		ExampleEnabled: cfg.ExampleEnabled,
 		Log:            log,
@@ -125,12 +177,13 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		Addr:              cfg.HTTPAddr,
 		Handler:           api.NewRouter(handlers),
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      5 * time.Minute, // тайлы отдаются крупными кусками
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
 	}
 
-	scheduler, err := update.New(cfg, log).StartSchedule()
-	if err != nil {
-		return err
-	}
+	scheduler := update.New(cfg, log).StartSchedule(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

@@ -67,9 +67,25 @@ func (c Config) StateDir() string { return filepath.Join(c.DataDir, "state") }
 // StatePath возвращает путь файла состояния.
 func (c Config) StatePath() string { return filepath.Join(c.StateDir(), "state.json") }
 
+// StatusPath возвращает путь файла статуса последнего обновления.
+func (c Config) StatusPath() string { return filepath.Join(c.StateDir(), "status.json") }
+
 // Load собирает конфигурацию из ENV, подставляя штатные значения по умолчанию.
 func Load() (Config, error) {
 	dataDir := env("DATA_DIR", "/data")
+
+	threads, err := envInt("TILEMAKER_THREADS", 0, 0, 256)
+	if err != nil {
+		return Config{}, err
+	}
+	importProcesses, err := envInt("IMPORT_PROCESSES", runtime.NumCPU(), 1, 256)
+	if err != nil {
+		return Config{}, err
+	}
+	shutdownSeconds, err := envInt("SHUTDOWN_TIMEOUT_SECONDS", 15, 1, 3600)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		HTTPAddr: env("HTTP_ADDR", ":8080"),
@@ -83,23 +99,23 @@ func Load() (Config, error) {
 
 		TilemakerConfig:  env("TILEMAKER_CONFIG", "/usr/local/share/tilemaker/config-openmaptiles.json"),
 		TilemakerProcess: env("TILEMAKER_PROCESS", "/usr/local/share/tilemaker/process-openmaptiles.lua"),
-		TilemakerThreads: envInt("TILEMAKER_THREADS", 0),
+		TilemakerThreads: threads,
 
 		WebDir: env("WEB_DIR", "/usr/local/share/slup-geo"),
 
-		ImportProcesses: envInt("IMPORT_PROCESSES", runtime.NumCPU()),
-		ShutdownTimeout: time.Duration(envInt("SHUTDOWN_TIMEOUT_SECONDS", 15)) * time.Second,
+		ImportProcesses: importProcesses,
+		ShutdownTimeout: time.Duration(shutdownSeconds) * time.Second,
 	}
 
-	var err error
-	if cfg.UpdateOnStart, err = envBool("UPDATE_ON_START", false); err != nil {
-		return Config{}, err
+	var err2 error
+	if cfg.UpdateOnStart, err2 = envBool("UPDATE_ON_START", false); err2 != nil {
+		return Config{}, err2
 	}
-	if cfg.TilesEnabled, err = envBool("TILES_ENABLED", true); err != nil {
-		return Config{}, err
+	if cfg.TilesEnabled, err2 = envBool("TILES_ENABLED", true); err2 != nil {
+		return Config{}, err2
 	}
-	if cfg.ExampleEnabled, err = envBool("ENABLE_EXAMPLE", true); err != nil {
-		return Config{}, err
+	if cfg.ExampleEnabled, err2 = envBool("ENABLE_EXAMPLE", true); err2 != nil {
+		return Config{}, err2
 	}
 
 	cfg.DatabaseDSN, err = databaseDSN()
@@ -111,7 +127,8 @@ func Load() (Config, error) {
 }
 
 // databaseDSN собирает строку подключения: DATABASE_URL имеет приоритет,
-// иначе стандартные PG* переменные.
+// иначе стандартные PG* переменные. Пароль обязателен: дефолтного пароля нет,
+// в штатном запуске его генерирует entrypoint.
 func databaseDSN() (string, error) {
 	if dsn := os.Getenv("DATABASE_URL"); dsn != "" {
 		return dsn, nil
@@ -120,8 +137,11 @@ func databaseDSN() (string, error) {
 	host := env("PGHOST", "127.0.0.1")
 	port := env("PGPORT", "5432")
 	user := env("PGUSER", "geo_user")
-	password := env("PGPASSWORD", "geo_password")
+	password := os.Getenv("PGPASSWORD")
 	database := env("PGDATABASE", "geo_db")
+	if strings.TrimSpace(password) == "" {
+		return "", fmt.Errorf("PGPASSWORD не задан: при штатном запуске пароль создаёт entrypoint, при внешней БД задайте PGPASSWORD или DATABASE_URL")
+	}
 
 	return fmt.Sprintf(
 		"postgres://%s:%s@%s/%s?sslmode=disable",
@@ -149,16 +169,21 @@ func envRaw(key string) string {
 	return strings.TrimSpace(os.Getenv(key))
 }
 
-func envInt(key string, fallback int) int {
+// envInt читает целочисленную переменную со строгой проверкой диапазона:
+// мусор или значение вне диапазона — ошибка конфигурации, а не тихий дефолт.
+func envInt(key string, fallback, min, max int) (int, error) {
 	raw := strings.TrimSpace(os.Getenv(key))
 	if raw == "" {
-		return fallback
+		return fallback, nil
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil {
-		return fallback
+		return 0, fmt.Errorf("переменная %s должна быть целым числом, получено %q", key, raw)
 	}
-	return v
+	if v < min || v > max {
+		return 0, fmt.Errorf("переменная %s должна быть в диапазоне %d..%d, получено %d", key, min, max, v)
+	}
+	return v, nil
 }
 
 func envBool(key string, fallback bool) (bool, error) {

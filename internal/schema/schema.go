@@ -6,6 +6,10 @@ import (
 	"fmt"
 )
 
+// Version — версия схемы данных (geo.meta.schema_version). Меняется при несовместимых
+// изменениях SQL-представлений: serve сравнивает её со своей и предупреждает о рассинхроне.
+const Version = 1
+
 //go:embed sql/*.sql
 var files embed.FS
 
