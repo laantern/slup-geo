@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: slup-geo
+  description: |
+    Гео-апплаенс Slup: внутренний API для монолита и публичные тайлы.
+    Ручки `/v1/*` вызываются только из монолита по внутренней docker-сети;
+    наружу (через nginx) выставлены только `/tiles/*`.
+  version: "1.0.0"
+
+paths:
+  /health:
+    get:
+      summary: Живость сервиса и БД
+      responses:
+        "200":
+          description: Сервис готов
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+        "503":
+          description: БД недоступна
+
+  /v1/point:
+    get:
+      summary: Локация точки — дом (в пределах 5 м от контура) и покрывающие зоны
+      parameters:
+        - { name: lat, in: query, required: true, schema: { type: number, format: double } }
+        - { name: lon, in: query, required: true, schema: { type: number, format: double } }
+      responses:
+        "200":
+          description: Локация точки
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PointResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/suggest:
+    get:
+      summary: Поисковые подсказки (до 10): админ-зоны/улицы, дома улицы, зоны улицы
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2 }
+      responses:
+        "200":
+          description: Подсказки
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SuggestResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /v1/areas/{id}:
+    get:
+      summary: Границы зоны или контур дома
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "W664945556 / N123 / W-3628814 (relations хранятся с отрицательным id)"
+          schema: { type: string }
+        - name: simplify
+          in: query
+          required: false
+          schema: { type: string, enum: [display, none], default: display }
+      responses:
+        "200":
+          description: Границы объекта
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AreaResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
+          description: Объект не найден
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "500": { $ref: "#/components/responses/Internal" }
+
+  /tiles/tiles.json:
+    get:
+      summary: Манифест тайлов (no-cache)
+      responses:
+        "200":
+          description: Список актуальных файлов
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TilesManifest" }
+
+  /tiles/{file}:
+    get:
+      summary: Версионный файл PMTiles (Range, immutable)
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z0-9._-]+\\.pmtiles$" }
+      responses:
+        "200":
+          description: Файл тайлов
+          content:
+            application/vnd.pmtiles:
+              schema: { type: string, format: binary }
+        "206":
+          description: Часть файла (Range)
+        "404":
+          description: Файл не найден или не проходит whitelist
+
+components:
+  responses:
+    BadRequest:
+      description: Некорректный запрос
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    Internal:
+      description: Внутренняя ошибка
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+
+  schemas:
+    ZoneLevel:
+      type: string
+      enum: [HOUSE, RESIDENTIAL, NEIGHBOURHOOD, QUARTER, CITY_DISTRICT, CITY, SETTLEMENT, RAION, OBLAST, COUNTRY, LANDUSE, AREA]
+    ZoneKind:
+      type: string
+      enum: [BUILDING, LANDUSE, PLACE, ADMIN, AREA]
+
+    PointResponse:
+      type: object
+      required: [text, zones]
+      properties:
+        text: { type: string, nullable: true, example: "улица Григория Денисенко, д. 22, Гомель" }
+        zones:
+          type: array
+          items: { $ref: "#/components/schemas/LocationZone" }
+
+    LocationZone:
+      type: object
+      required: [id, name, level, kind, areaM2]
+      properties:
+        id: { type: string, example: "W664945556" }
+        name: { type: string }
+        level: { $ref: "#/components/schemas/ZoneLevel" }
+        kind: { $ref: "#/components/schemas/ZoneKind" }
+        areaM2: { type: integer, format: int64 }
+
+    SuggestResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Suggestion" }
+
+    Suggestion:
+      type: object
+      required: [id, name, level, kind, areaM2, center]
+      properties:
+        id: { type: string }
+        name: { type: string, example: "улица Бородина, д. 6А" }
+        level: { $ref: "#/components/schemas/ZoneLevel" }
+        kind: { $ref: "#/components/schemas/ZoneKind" }
+        areaM2: { type: integer, format: int64 }
+        subtitle: { type: string, nullable: true }
+        center: { $ref: "#/components/schemas/Center" }
+
+    Center:
+      type: object
+      required: [lat, lon]
+      properties:
+        lat: { type: number, format: double }
+        lon: { type: number, format: double }
+
+    AreaResponse:
+      type: object
+      required: [id, name, level, kind, areaM2, geometry]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        level: { $ref: "#/components/schemas/ZoneLevel" }
+        kind: { $ref: "#/components/schemas/ZoneKind" }
+        areaM2: { type: integer, format: int64 }
+        geometry:
+          description: GeoJSON (Polygon/MultiPolygon)
+
+    TilesManifest:
+      type: object
+      required: [files]
+      properties:
+        files:
+          type: array
+          items:
+            type: object
+            required: [name, sizeBytes, builtAt]
+            properties:
+              name: { type: string, example: "basemap-20261006T120000Z.pmtiles" }
+              sizeBytes: { type: integer, format: int64 }
+              builtAt: { type: string, format: date-time }
+        attribution: { type: string }
+        generatedAt: { type: string, format: date-time }
+
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type: { type: string, enum: [VALIDATION_ERROR, NOT_FOUND, INTERNAL_SERVER_ERROR] }
+        title: { type: string }
+        status: { type: integer }

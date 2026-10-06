@@ -1,0 +1,7 @@
+# Единые переводы строк: LF везде, кроме Windows-скриптов.
+# Иначе core.autocrlf=true на Windows-чеккауте переведёт entrypoint.sh/smoke.sh
+# в CRLF и сломает shebang внутри контейнера.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf

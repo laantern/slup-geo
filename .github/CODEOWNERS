@@ -1,0 +1,4 @@
+# Владелец всех файлов репозитория. Вместе с правилом
+# «Require review from Code Owners» (ruleset / branch protection)
+# PR нельзя смержить без аппрува владельца.
+* @laantern
