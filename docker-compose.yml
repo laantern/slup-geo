@@ -1,25 +1,64 @@
-# Локальный запуск апплаенса: docker compose up --build
-# Первый старт скачивает PBF (~334 МБ) и импортирует его — это занимает несколько минут.
+# slup-geo: готовый образ из Docker Hub.
+# Это рабочий пример «под ключ»: скопируйте блок в свой compose и поправьте под себя.
 services:
   geo:
-    build:
-      context: .
     image: aliakseikarpenka/slup-geo:latest
-    container_name: slup-geo-dev
+    restart: unless-stopped
     ports:
-      # Монолит в dev-окружении смотрит на http://localhost:8083
+      # Наружу нужен только если обращаетесь с хоста. В docker-сети монолит ходит на http://geo:8080
       - "8083:8080"
     environment:
-      PBF_URL: ${PBF_URL:-https://download.geofabrik.de/europe/belarus-latest.osm.pbf}
-      UPDATE_ON_START: "false"
-      # Периодичность обновлений внутри контейнера (по умолчанию выключена):
+      # --- ОБЯЗАТЕЛЬНОЕ, если нет локального PBF: откуда качать данные ---
+      PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
+
+      # --- НЕОБЯЗАТЕЛЬНЫЕ (ниже — значения по умолчанию) ---
+
+      # Локальный файл PBF: кэш загрузки / офлайн-импорт (вместо или вместе с PBF_URL)
+      # PBF_PATH: /data/osm/belarus-latest.osm.pbf
+
+      # Обновлять данные при каждом старте контейнера
+      # UPDATE_ON_START: "false"
+
+      # Cron-расписание обновлений внутри сервиса (пусто = выключено), например каждый понедельник в 4:00
       # UPDATE_SCHEDULE: "0 4 * * 1"
-      TILES_URL: ${TILES_URL:-https://data.source.coop/protomaps/openstreetmap/v4.pmtiles}
-      TILES_BBOX: "23.1,51.2,32.8,56.2"
-      TILES_MAXZOOM: "15"
-      LOG_LEVEL: info
+
+      # Подложка карты: PMTiles-архив Protomaps (глобальный basemap из OSM).
+      # update скачает из него только bbox TILES_BBOX (через Range-запросы) в /tiles.
+      # Пусто = тайлы не пересобираются, сервис работает без подложки.
+      # Проект Protomaps не рекомендует хотлинкать эти сборки: для прода скачайте архив
+      # (или его bbox-вырезку) в своё хранилище и укажите здесь свой URL.
+      # TILES_URL: https://data.source.coop/protomaps/openstreetmap/v4.pmtiles
+
+      # Область выборки тайлов: minLon,minLat,maxLon,maxLat (по умолчанию — Беларусь)
+      # TILES_BBOX: "23.1,51.2,32.8,56.2"
+
+      # Диапазон зумов тайлов
+      # TILES_MINZOOM: "0"
+      # TILES_MAXZOOM: "15"
+
+      # Число процессов osm2pgsql при импорте (по умолчанию — число CPU)
+      # IMPORT_PROCESSES: "4"
+
+      # Каталог данных: БД, PBF, тайлы, состояние (один volume)
+      # DATA_DIR: /data
+
+      # Адрес API внутри контейнера
+      # HTTP_ADDR: ":8080"
+
+      # Уровень логов: debug | info | warn | error
+      # LOG_LEVEL: info
+
+      # --- ВНУТРЕННЯЯ БД (менять не нужно) ---
+      # Встроенный PostgreSQL: креды генерируются при первом старте и хранятся в volume.
+      # Переопределяются стандартными PG*-переменными или строкой подключения:
+      # DATABASE_URL: postgres://geo_user:geo_password@127.0.0.1:5432/geo_db
+      # PGHOST: 127.0.0.1
+      # PGPORT: "5432"
+      # PGUSER: geo_user
+      # PGPASSWORD: geo_password
+      # PGDATABASE: geo_db
     volumes:
-      # БД + PBF + тайлы + состояние — одним volume
+      # БД + PBF + тайлы + состояние. Пересоздание контейнера данные не теряет.
       - geo_data:/data
 
 volumes:

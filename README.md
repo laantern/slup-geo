@@ -24,26 +24,50 @@
 
 ## Быстрый старт
 
-```bash
-# готовый образ из Docker Hub
-docker run -d --name slup-geo -p 8083:8080 \
-  -e PBF_URL=https://download.geofabrik.de/europe/belarus-latest.osm.pbf \
-  -v geo_data:/data \
-  aliakseikarpenka/slup-geo:latest
-```
-
-Или собрать локально из репозитория:
+Скопируйте `docker-compose.yml` из репозитория (или блок ниже) и запустите:
 
 ```bash
-docker compose up --build
-```
-
-Первый запуск скачивает PBF (~334 МБ для Беларуси), импортирует его и собирает тайлы — это
-несколько минут. Готовность:
-
-```bash
+docker compose up -d
+docker compose logs -f geo   # первый импорт: скачивание PBF + osm2pgsql, несколько минут
 curl http://localhost:8083/health
 # {"status":"ok"}
+```
+
+Пока идёт первый импорт, сервис ещё не слушает порт — дождитесь `{"status":"ok"}`.
+Пример со всеми переменными: обязательное отмечено, остальное — значения по умолчанию.
+
+```yaml
+services:
+  geo:
+    image: aliakseikarpenka/slup-geo:latest
+    restart: unless-stopped
+    ports:
+      - "8083:8080"   # с хоста; в docker-сети монолит ходит на http://geo:8080
+    environment:
+      # ОБЯЗАТЕЛЬНОЕ, если нет локального PBF
+      PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
+
+      # НЕОБЯЗАТЕЛЬНЫЕ (значения — по умолчанию)
+      # PBF_PATH: /data/osm/belarus-latest.osm.pbf   # локальный PBF: кэш/офлайн-импорт
+      # UPDATE_ON_START: "false"                     # обновлять данные при каждом старте
+      # UPDATE_SCHEDULE: "0 4 * * 1"                 # cron обновлений (пусто = выключено)
+      # TILES_URL: https://data.source.coop/protomaps/openstreetmap/v4.pmtiles  # подложка карты
+      # TILES_BBOX: "23.1,51.2,32.8,56.2"            # minLon,minLat,maxLon,maxLat
+      # TILES_MINZOOM: "0"
+      # TILES_MAXZOOM: "15"
+      # IMPORT_PROCESSES: "4"                        # процессов osm2pgsql
+      # DATA_DIR: /data                              # БД, PBF, тайлы, состояние
+      # HTTP_ADDR: ":8080"
+      # LOG_LEVEL: info                              # debug | info | warn | error
+
+      # ВНУТРЕННЯЯ БД (менять не нужно): креды генерируются при первом старте
+      # DATABASE_URL: postgres://geo_user:geo_password@127.0.0.1:5432/geo_db
+      # PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE
+    volumes:
+      - geo_data:/data
+
+volumes:
+  geo_data:
 ```
 
 ### Попробовать
@@ -118,12 +142,30 @@ Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `N
 **Данные** — один volume `geo_data`: PostgreSQL, PBF-кэш, тайлы и состояние. Пересоздание
 контейнера данные не теряет; полная очистка — `docker compose down -v`.
 
+### Подложка карты (TILES_URL)
+
+`TILES_URL` — это PMTiles-архив с векторной подложкой. По умолчанию в примерах указан
+[Protomaps basemap](https://protomaps.com) (`data.source.coop` — зеркало их ежедневных сборок
+планеты, собранных из OpenStreetMap): `update` скачивает из глобального архива только нужный
+bbox (`TILES_BBOX`) через HTTP Range-запросы и кладёт локальный `basemap-*.pmtiles`.
+
+- пусто — тайлы не пересобираются, API работает полностью, карта будет без подложки;
+- Protomaps не рекомендует хотлинкать их сборки: для продакшена скачайте архив (или сразу
+  bbox-вырезку) в своё хранилище и укажите здесь свой URL — тогда обновления не зависят от чужого хостинга;
+- атрибуция OSM (`© OpenStreetMap contributors`) обязательна при показе карты.
+
 ## Разработка
 
 ```bash
 go build ./...
 go vet ./...
 go test ./...
+```
+
+Локальная сборка образа (для проверок и e2e):
+
+```bash
+docker build -t aliakseikarpenka/slup-geo:dev .
 ```
 
 - `scripts/e2e.ps1` — полный e2e на реальном PBF (импорт, эталонные кейсы, персистентность volume).
