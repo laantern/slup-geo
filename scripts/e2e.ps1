@@ -125,7 +125,7 @@ Show "tiles: алиас basemap.pmtiles" ($aliasMagic -eq "PMTiles") "magic=$ali
 $fontCode = (& curl.exe -s -o NUL -w "%{http_code}" "$base/tiles/fonts/Noto%20Sans%20Regular/0-255.pbf")
 Show "tiles: глифы" ($fontCode -eq "200") "http=$fontCode"
 
-$exampleCode = (& curl.exe -s -o NUL -w "%{http_code}" "$base/example")
+$exampleCode = (& curl.exe -s -L -o NUL -w "%{http_code}" "$base/example")
 Show "example: страница" ($exampleCode -eq "200") "http=$exampleCode"
 
 # Данные должны переживать пересоздание контейнера: БД и тайлы лежат в /data (volume).

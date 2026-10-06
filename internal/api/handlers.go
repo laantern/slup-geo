@@ -38,10 +38,9 @@ func NewRouter(h *Handlers) *http.ServeMux {
 	mux.Handle("GET /tiles/", h.Tiles)
 	if h.ExampleEnabled {
 		exampleDir := filepath.Join(h.Tiles.WebDir, "example")
+		// Регистрируем только "/example/": ServeMux сам редиректит "/example" на него,
+		// чтобы относительные пути внутри страницы резолвились верно.
 		mux.Handle("GET /example/", http.StripPrefix("/example/", http.FileServer(http.Dir(exampleDir))))
-		mux.HandleFunc("GET /example", func(w http.ResponseWriter, r *http.Request) {
-			http.ServeFile(w, r, filepath.Join(exampleDir, "index.html"))
-		})
 	}
 	return mux
 }

@@ -412,17 +412,21 @@ func TestExamplePage(t *testing.T) {
 	if err := os.MkdirAll(exampleDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	page := `<script src="./maplibre-gl.js"></script>slup-geo example`
+	page := `<script src="/example/maplibre-gl.js"></script>slup-geo example`
 	if err := os.WriteFile(filepath.Join(exampleDir, "index.html"), []byte(page), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	router := newTestRouterWithWeb(t, &fakeStore{}, t.TempDir(), webDir, true)
 
-	recorder := doRequest(t, router, http.MethodGet, "/example", nil)
+	// Без слэша — редирект на /example/, иначе относительные пути страницы ломаются.
+	if recorder := doRequest(t, router, http.MethodGet, "/example", nil); recorder.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("статус = %d, ожидался 307", recorder.Code)
+	}
+	recorder := doRequest(t, router, http.MethodGet, "/example/", nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("статус = %d", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), "maplibre-gl.js") {
+	if !strings.Contains(recorder.Body.String(), "/example/maplibre-gl.js") {
 		t.Fatalf("страница не отдана: %s", recorder.Body.String())
 	}
 }
