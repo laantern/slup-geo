@@ -17,7 +17,8 @@
   по возрастанию площади; готовая подпись вида «улица Григория Денисенко, д. 22, Гомель».
 - **Границы** (`/v1/areas/{id}`) — GeoJSON, упрощённая (по умолчанию) или точная геометрия;
   мультиполигоны и эксклавы районов сохраняются.
-- **Карта** (`/tiles/*`) — PMTiles-подложка (Protomaps basemap) с Range-запросами и версионными файлами.
+- **Карта** (`/tiles/*`) — векторная подложка PMTiles, собранная из того же PBF (tilemaker,
+  схема OpenMapTiles); Range-запросы, версионные файлы.
 - **Автономные обновления** — скачивание PBF, импорт и пересборка данных/тайлов по расписанию
   (`UPDATE_SCHEDULE`), при старте (`UPDATE_ON_START`) или вручную.
 - **Данные воспроизводимы из PBF** — резервные копии не критичны, пересоздание занимает минуты.
@@ -39,10 +40,8 @@ services:
       # PBF_PATH: /data/osm/belarus-latest.osm.pbf   # локальный PBF: кэш/офлайн-импорт
       # UPDATE_ON_START: "false"                     # обновлять данные при каждом старте
       # UPDATE_SCHEDULE: "0 4 * * 1"                 # cron обновлений (пусто = выключено)
-      # TILES_URL: https://data.source.coop/protomaps/openstreetmap/v4.pmtiles  # подложка карты
-      # TILES_BBOX: "23.1,51.2,32.8,56.2"            # minLon,minLat,maxLon,maxLat
-      # TILES_MINZOOM: "0"
-      # TILES_MAXZOOM: "15"
+      # TILES_ENABLED: "true"                        # собирать подложку из PBF (tilemaker)
+      # TILEMAKER_THREADS: "0"                       # потоков tilemaker (0 = авто)
       # IMPORT_PROCESSES: "4"                        # процессов osm2pgsql
       # DATA_DIR: /data                              # БД, PBF, тайлы, состояние
       # HTTP_ADDR: ":8080"
@@ -99,9 +98,9 @@ Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `N
 | `PBF_PATH` | `$DATA_DIR/osm/belarus-latest.osm.pbf` | Локальный файл PBF (кэш загрузки, офлайн-импорт) |
 | `UPDATE_ON_START` | `false` | Обновлять данные при каждом старте контейнера |
 | `UPDATE_SCHEDULE` | пусто (выключено) | Cron-расписание обновлений, например `0 4 * * 1` |
-| `TILES_URL` | пусто | Источник PMTiles для сборки подложки (пусто — тайлы не пересобираются) |
-| `TILES_BBOX` | `23.1,51.2,32.8,56.2` | Область выборки тайлов: `minLon,minLat,maxLon,maxLat` |
-| `TILES_MINZOOM` / `TILES_MAXZOOM` | `0` / `15` | Диапазон зумов тайлов |
+| `TILES_ENABLED` | `true` | Собирать векторную подложку из PBF (tilemaker) |
+| `TILEMAKER_THREADS` | `0` (авто) | Потоков tilemaker при сборке тайлов |
+| `TILEMAKER_CONFIG` / `TILEMAKER_PROCESS` | профиль OpenMapTiles из образа | Пути к конфигу слоёв и Lua-профилю |
 | `IMPORT_PROCESSES` | число CPU | Процессов `osm2pgsql` при импорте |
 | `DATA_DIR` | `/data` | Корень данных: БД, PBF, тайлы, состояние |
 | `HTTP_ADDR` | `:8080` | Адрес API |
@@ -117,7 +116,8 @@ Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `N
 3. `osm2pgsql --create --hstore-all --latlong` — таблицы `planet_osm_*`;
 4. представления `geo.zones` (склейка мультиполигонов, упрощённая геометрия), `geo.streets`,
    `geo.addresses`, `geo.names` (поисковый индекс имён) + индексы (pg_trgm, GIST);
-5. `pmtiles extract` — версионный `basemap-<время>.pmtiles` и `tiles.json` (атомарно);
+5. `tilemaker` — векторные тайлы из того же PBF (схема OpenMapTiles, зумы 0–14):
+   версионный `basemap-<время>.pmtiles` (temp + rename) и `tiles.json` (атомарно);
 6. маркер `state.json` (атомарно).
 
 **Сервис** (`slup-geo serve`) отдаёт API и тайлы; при заданном `UPDATE_SCHEDULE` внутри процесса
@@ -126,16 +126,17 @@ Problem Details с машинным кодом в `type` (`VALIDATION_ERROR`, `N
 **Данные** — один volume `geo_data`: PostgreSQL, PBF-кэш, тайлы и состояние. Пересоздание
 контейнера данные не теряет; полная очистка — `docker compose down -v`.
 
-### Подложка карты (TILES_URL)
+### Подложка карты (тайлы)
 
-`TILES_URL` — это PMTiles-архив с векторной подложкой. По умолчанию в примерах указан
-[Protomaps basemap](https://protomaps.com) (`data.source.coop` — зеркало их ежедневных сборок
-планеты, собранных из OpenStreetMap): `update` скачивает из глобального архива только нужный
-bbox (`TILES_BBOX`) через HTTP Range-запросы и кладёт локальный `basemap-*.pmtiles`.
+Подложка собирается **из того же OSM PBF**, что и поисковые данные: `tilemaker` (профиль
+OpenMapTiles) нарезает векторные тайлы (зумы 0–14) в один файл `basemap-<версия>.pmtiles`.
+Внешних источников тайлов нет — только ваш PBF.
 
-- пусто — тайлы не пересобираются, API работает полностью, карта будет без подложки;
-- Protomaps не рекомендует хотлинкать их сборки: для продакшена скачайте архив (или сразу
-  bbox-вырезку) в своё хранилище и укажите здесь свой URL — тогда обновления не зависят от чужого хостинга;
+- `TILES_ENABLED=false` — тайлы не пересобираются (API работает полностью, карта без подложки);
+- файл отдаётся по `/tiles/*` (Range, версионные имена `immutable`), манифест `/tiles/tiles.json`
+  указывает актуальный файл;
+- для отрисовки на фронте нужен стиль под схему OpenMapTiles (готовый стиль и страница-пример —
+  следующий этап);
 - атрибуция OSM (`© OpenStreetMap contributors`) обязательна при показе карты.
 
 ## Разработка
@@ -157,8 +158,10 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 - `scripts/debug-point.sql` — отладка локации точки прямо в psql.
 
 Структура: `cmd/slup-geo` (CLI `serve`/`update`/`version`), `internal/api` (HTTP и тайлы),
-`internal/geo` (модели, SQL, логика поиска), `internal/update` (PBF, osm2pgsql, PMTiles),
-`internal/schema` (SQL-схема), `docker/` (entrypoint).
+`internal/geo` (модели, SQL, логика поиска), `internal/update` (PBF, osm2pgsql, tilemaker),
+`internal/schema` (SQL-схема), `tiles/` (профиль tilemaker), `docker/` (entrypoint).
+
+Сторонние компоненты и лицензии — [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 ## CI/CD
 

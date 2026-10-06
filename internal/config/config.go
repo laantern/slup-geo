@@ -34,13 +34,14 @@ type Config struct {
 	// UpdateSchedule — cron-расписание обновлений внутри процесса (пусто — выключено).
 	UpdateSchedule string
 
-	// TilesURL — источник PMTiles (Protomaps build), пусто — тайлы не собираются.
-	TilesURL string
-	// TilesBBox — bbox выборки тайлов: minLon,minLat,maxLon,maxLat.
-	TilesBBox string
-	// TilesMinZoom/TilesMaxZoom — диапазон зумов выборки тайлов.
-	TilesMinZoom int
-	TilesMaxZoom int
+	// TilesEnabled — собирать векторные тайлы из PBF (tilemaker).
+	TilesEnabled bool
+	// TilemakerConfig — путь к конфигу слоёв (OpenMapTiles-профиль).
+	TilemakerConfig string
+	// TilemakerProcess — путь к Lua-профилю обработки тегов.
+	TilemakerProcess string
+	// TilemakerThreads — число потоков tilemaker (0 — авто).
+	TilemakerThreads int
 
 	// ImportProcesses — число процессов osm2pgsql.
 	ImportProcesses int
@@ -51,6 +52,9 @@ type Config struct {
 
 // TilesDir возвращает каталог файлов тайлов.
 func (c Config) TilesDir() string { return filepath.Join(c.DataDir, "tiles") }
+
+// TmpDir возвращает каталог временных файлов (например, промежуточные данные tilemaker).
+func (c Config) TmpDir() string { return filepath.Join(c.DataDir, "tmp") }
 
 // StateDir возвращает каталог состояния (маркер импорта, tiles.json и т.п.).
 func (c Config) StateDir() string { return filepath.Join(c.DataDir, "state") }
@@ -71,10 +75,10 @@ func Load() (Config, error) {
 		PBFPath: env("PBF_PATH", filepath.Join(dataDir, "osm", "belarus-latest.osm.pbf")),
 
 		UpdateSchedule: env("UPDATE_SCHEDULE", ""),
-		TilesURL:       env("TILES_URL", ""),
-		TilesBBox:      env("TILES_BBOX", "23.1,51.2,32.8,56.2"),
-		TilesMinZoom:   envInt("TILES_MINZOOM", 0),
-		TilesMaxZoom:   envInt("TILES_MAXZOOM", 15),
+
+		TilemakerConfig:  env("TILEMAKER_CONFIG", "/usr/local/share/tilemaker/config-openmaptiles.json"),
+		TilemakerProcess: env("TILEMAKER_PROCESS", "/usr/local/share/tilemaker/process-openmaptiles.lua"),
+		TilemakerThreads: envInt("TILEMAKER_THREADS", 0),
 
 		ImportProcesses: envInt("IMPORT_PROCESSES", runtime.NumCPU()),
 		ShutdownTimeout: time.Duration(envInt("SHUTDOWN_TIMEOUT_SECONDS", 15)) * time.Second,
@@ -82,6 +86,9 @@ func Load() (Config, error) {
 
 	var err error
 	if cfg.UpdateOnStart, err = envBool("UPDATE_ON_START", false); err != nil {
+		return Config{}, err
+	}
+	if cfg.TilesEnabled, err = envBool("TILES_ENABLED", true); err != nil {
 		return Config{}, err
 	}
 

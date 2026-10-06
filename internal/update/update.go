@@ -77,7 +77,7 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 		return err
 	}
 
-	u.log.Info("обновление начато", "pbf", u.cfg.PBFPath, "tilesUrl", u.cfg.TilesURL)
+	u.log.Info("обновление начато", "pbf", u.cfg.PBFPath, "тайлы", u.cfg.TilesEnabled)
 
 	if err := db.ExecScripts(ctx, u.cfg.DatabaseDSN, extensions); err != nil {
 		return fmt.Errorf("расширения БД: %w", err)
@@ -100,7 +100,7 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 		return fmt.Errorf("analyze матвью: %w", err)
 	}
 
-	tiles, err := u.buildTiles(ctx)
+	tiles, err := u.buildTiles(ctx, pbf.path)
 	if err != nil {
 		return fmt.Errorf("сборка тайлов: %w", err)
 	}
