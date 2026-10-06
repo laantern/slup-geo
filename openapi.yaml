@@ -40,7 +40,7 @@ paths:
 
   /v1/suggest:
     get:
-      summary: Поисковые подсказки (до 10): админ-зоны/улицы, дома улицы, зоны улицы
+      summary: "Поисковые подсказки (до 10): админ-зоны/улицы, дома улицы, зоны улицы"
       parameters:
         - name: q
           in: query
@@ -91,6 +91,30 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TilesManifest" }
+
+  /tiles/basemap.pmtiles:
+    get:
+      summary: Алиас актуального архива тайлов (no-cache)
+      responses:
+        "200":
+          description: Актуальный файл тайлов
+          content:
+            application/vnd.pmtiles:
+              schema: { type: string, format: binary }
+        "206":
+          description: Часть файла (Range)
+        "404":
+          description: Тайлы ещё не собраны
+
+  /tiles/style.json:
+    get:
+      summary: Стиль MapLibre (OSM Bright под схему OpenMapTiles, относительные ссылки)
+      responses:
+        "200":
+          description: MapLibre Style JSON
+          content:
+            application/json:
+              schema: { type: object }
 
   /tiles/{file}:
     get:

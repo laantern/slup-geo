@@ -7,7 +7,7 @@
 param(
     [string]$PbfPath = "",
     [string]$PbfUrl = "",
-    [string]$Image = "ghcr.io/laantern/slup-geo:dev",
+    [string]$Image = "aliakseikarpenka/slup-geo:dev",
     [string]$Container = "slup-geo-e2e",
     [int]$Port = 8083,
     [int]$WaitMinutes = 50,
@@ -108,6 +108,25 @@ Show "areas: MultiPolygon" ($a.geometry.type -in @("Polygon", "MultiPolygon")) $
 
 $tiles = Invoke-RestMethod "$base/tiles/tiles.json"
 Show "tiles: манифест" ($null -ne $tiles.files) ($tiles | ConvertTo-Json -Compress)
+if ($tiles.files.Count -gt 0) {
+    $tileName = $tiles.files[0].name
+    $magic = (& curl.exe -s -r 0-6 "$base/tiles/$tileName")
+    Show "tiles: архив PMTiles (Range)" ($magic -eq "PMTiles") "magic=$magic"
+} else {
+    Show "tiles: архив PMTiles (Range)" $false "манифест пуст"
+}
+
+$style = Invoke-RestMethod "$base/tiles/style.json"
+Show "tiles: стиль с относительным источником" ($style.sources.openmaptiles.url -eq "pmtiles:///tiles/basemap.pmtiles") ($style.sources.openmaptiles.url)
+
+$aliasMagic = (& curl.exe -s -r 0-6 "$base/tiles/basemap.pmtiles")
+Show "tiles: алиас basemap.pmtiles" ($aliasMagic -eq "PMTiles") "magic=$aliasMagic"
+
+$fontCode = (& curl.exe -s -o NUL -w "%{http_code}" "$base/tiles/fonts/Noto%20Sans%20Regular/0-255.pbf")
+Show "tiles: глифы" ($fontCode -eq "200") "http=$fontCode"
+
+$exampleCode = (& curl.exe -s -L -o NUL -w "%{http_code}" "$base/example")
+Show "example: страница" ($exampleCode -eq "200") "http=$exampleCode"
 
 # Данные должны переживать пересоздание контейнера: БД и тайлы лежат в /data (volume).
 docker rm -f $Container | Out-Null

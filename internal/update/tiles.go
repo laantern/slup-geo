@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -23,15 +24,15 @@ const (
 	osmAttribution  = "© OpenStreetMap contributors"
 )
 
-// buildTiles собирает PMTiles из внешнего источника (Protomaps build) и обновляет tiles.json.
-// Пустой TILES_URL — шаг пропускается, остаётся прежний набор файлов.
-func (u *Updater) buildTiles(ctx context.Context) ([]TileFile, error) {
-	if u.cfg.TilesURL != "" {
-		if err := u.extractTiles(ctx); err != nil {
+// buildTiles собирает векторные тайлы из локального PBF (tilemaker, схема OpenMapTiles)
+// и обновляет манифест tiles.json.
+func (u *Updater) buildTiles(ctx context.Context, pbfPath string) ([]TileFile, error) {
+	if u.cfg.TilesEnabled {
+		if err := u.extractTiles(ctx, pbfPath); err != nil {
 			return nil, err
 		}
 	} else {
-		u.log.Warn("TILES_URL не задан — тайлы не пересобираются, отдаём прежние")
+		u.log.Warn("TILES_ENABLED=false — тайлы не пересобираются, отдаём прежние")
 	}
 
 	files, err := u.scanTiles()
@@ -49,28 +50,35 @@ func (u *Updater) buildTiles(ctx context.Context) ([]TileFile, error) {
 	return files, nil
 }
 
-// extractTiles скачивает bbox-выборку из TILES_URL в версионный файл (temp + rename).
-func (u *Updater) extractTiles(ctx context.Context) error {
+// extractTiles запускает tilemaker: PBF → версионный basemap-*.pmtiles (temp + rename).
+// Промежуточные данные (--store) пишутся в каталог данных и удаляются после сборки.
+func (u *Updater) extractTiles(ctx context.Context, pbfPath string) error {
 	version := time.Now().UTC().Format("20060102T150405Z")
 	name := tilesFilePrefix + version + tilesFileSuffix
 	finalPath := filepath.Join(u.cfg.TilesDir(), name)
-	tmpPath := finalPath + ".part"
 
+	tmpDir := u.cfg.TmpDir()
+	storeDir := filepath.Join(tmpDir, "tilemaker")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		return fmt.Errorf("создание временного каталога: %w", err)
+	}
+	defer os.RemoveAll(tmpDir) // промежуточные данные больше не нужны
+
+	tmpPath := filepath.Join(tmpDir, name)
 	args := []string{
-		"extract", u.cfg.TilesURL, tmpPath,
-		"--bbox=" + u.cfg.TilesBBox,
-		"--minzoom=" + fmt.Sprintf("%d", u.cfg.TilesMinZoom),
-		"--maxzoom=" + fmt.Sprintf("%d", u.cfg.TilesMaxZoom),
-		"--download-threads=4",
+		"--input", pbfPath,
+		"--output", tmpPath,
+		"--config", u.cfg.TilemakerConfig,
+		"--process", u.cfg.TilemakerProcess,
+		"--threads", strconv.Itoa(u.cfg.TilemakerThreads),
+		"--store", storeDir,
 	}
 
-	u.log.Info("сборка тайлов начата", "источник", u.cfg.TilesURL, "bbox", u.cfg.TilesBBox)
-	if err := runCommand(ctx, "pmtiles", args, os.Environ()); err != nil {
-		_ = os.Remove(tmpPath)
+	u.log.Info("сборка тайлов tilemaker начата", "pbf", pbfPath, "потоков", u.cfg.TilemakerThreads)
+	if err := runCommand(ctx, "tilemaker", args, os.Environ()); err != nil {
 		return err
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_ = os.Remove(tmpPath)
 		return fmt.Errorf("публикация файла тайлов: %w", err)
 	}
 
