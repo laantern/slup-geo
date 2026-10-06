@@ -1,0 +1,26 @@
+# Локальный запуск апплаенса: docker compose up --build
+# Первый старт скачивает PBF (~334 МБ) и импортирует его — это занимает несколько минут.
+services:
+  geo:
+    build:
+      context: .
+    image: ghcr.io/laantern/slup-geo:dev
+    container_name: slup-geo-dev
+    ports:
+      # Монолит в dev-окружении смотрит на http://localhost:8083
+      - "8083:8080"
+    environment:
+      PBF_URL: ${PBF_URL:-https://download.geofabrik.de/europe/belarus-latest.osm.pbf}
+      UPDATE_ON_START: "false"
+      # Периодичность обновлений внутри контейнера (по умолчанию выключена):
+      # UPDATE_SCHEDULE: "0 4 * * 1"
+      TILES_URL: ${TILES_URL:-https://data.source.coop/protomaps/openstreetmap/v4.pmtiles}
+      TILES_BBOX: "23.1,51.2,32.8,56.2"
+      TILES_MAXZOOM: "15"
+      LOG_LEVEL: info
+    volumes:
+      # БД + PBF + тайлы + состояние — одним volume
+      - geo_data:/data
+
+volumes:
+  geo_data:
