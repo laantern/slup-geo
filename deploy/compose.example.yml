@@ -1,0 +1,42 @@
+# Пример docker-compose для slup-geo с hardening.
+# Скопируйте в свой проект и при необходимости поправьте PBF_URL/TZ.
+services:
+  geo:
+    image: aliakseikarpenka/slup-geo:latest   # в проде лучше закрепить версию/digest
+    restart: unless-stopped
+    # Обновление/остановка успевают завершиться: SIGTERM передаётся в update/serve.
+    stop_grace_period: 2m
+    # Образ пишет только в /data (volume) и tmpfs — остальное read-only.
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    security_opt:
+      - no-new-privileges:true
+    # Минимальные capabilities: chown/chmod данных, смена пользователя (gosu), сигналы.
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL]
+    # Порт нужен только если обращаетесь к сервису с хоста (например, к /example).
+    # В docker-сети монолит ходит на http://geo:8080 — публикация не требуется.
+    ports:
+      - "8080:8080"
+    environment:
+      PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
+      # TZ: Europe/Minsk          # влияет на расписание UPDATE_SCHEDULE (по умолчанию UTC)
+      # UPDATE_SCHEDULE: "0 4 * * 1"
+      # ENABLE_EXAMPLE: "false"   # выключить страницу-пример в проде
+      # TILES_ENABLED: "false"    # только API, без карты
+      # IMPORT_PROCESSES: "4"
+      # LOG_LEVEL: info
+    volumes:
+      - geo_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      # С запасом на первый импорт (PBF + osm2pgsql + tilemaker).
+      start_period: 30m
+      retries: 3
+
+volumes:
+  geo_data:

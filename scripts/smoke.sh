@@ -19,11 +19,13 @@ check() {
 }
 
 check "health" "$BASE_URL/health" '"status":"ok"'
+check "status" "$BASE_URL/status" '"schemaReady":true'
 check "point: дом с адресом" "$BASE_URL/v1/point?lat=52.3955063&lon=30.9607992" "Григория Денисенко"
 check "point: зоны без дома" "$BASE_URL/v1/point?lat=52.3021783&lon=30.8780772" "Бобовичский"
 check "suggest: улица" "$BASE_URL/v1/suggest?q=%D0%91%D0%BE%D1%80%D0%BE%D0%B4%D0%B8%D0%BD%D0%B0" '"items"'
 check "suggest: город" "$BASE_URL/v1/suggest?q=%D0%93%D0%BE%D0%BC%D0%B5%D0%BB%D1%8C" "CITY"
 check "areas: зона" "$BASE_URL/v1/areas/W-3628814?simplify=display" '"geometry"'
 check "tiles: манифест" "$BASE_URL/tiles/tiles.json" '"files"'
+check "tiles: вендорные библиотеки" "$BASE_URL/tiles/vendor/pmtiles.js" 'pmtiles'
 
 echo "Все проверки пройдены: $BASE_URL"
