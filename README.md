@@ -187,21 +187,66 @@ const map = new maplibregl.Map({
 | `DATABASE_URL` / `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | встроенная БД | Подключение к PostgreSQL |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 
-## Как это работает
+## Как это работает (по шагам)
 
-**Обновление данных** (`slup-geo update`):
+### Конвейер данных — `slup-geo update`
 
-1. advisory lock — параллельные обновления не запускаются;
-2. скачивание PBF (условный запрос `If-Modified-Since`, если файл уже есть);
-3. `osm2pgsql --create --hstore-all --latlong` — таблицы `planet_osm_*`;
-4. представления `geo.zones` (склейка мультиполигонов, упрощённая геометрия), `geo.streets`,
-   `geo.addresses`, `geo.names` (поисковый индекс имён) + индексы (pg_trgm, GIST);
-5. `tilemaker` — векторные тайлы из того же PBF (схема OpenMapTiles, зумы 0–14):
-   версионный `basemap-<время>.pmtiles` (temp + rename) и `tiles.json` (атомарно);
-6. маркер `state.json` (атомарно).
+```
+[OSM PBF] → osm2pgsql → PostgreSQL+PostGIS → geo.* представления → поисковый API
+          ↘ tilemaker → basemap-*.pmtiles → /tiles/* → MapLibre на фронте
+```
 
-**Сервис** (`slup-geo serve`) отдаёт API и тайлы; при заданном `UPDATE_SCHEDULE` внутри процесса
-работает cron, который повторяет цикл обновления.
+1. **Вход: OSM PBF** — данные [OpenStreetMap](https://www.openstreetmap.org/) (лицензия
+   [ODbL 1.0](https://opendatacommons.org/licenses/odbl/)); скачивается с
+   [Geofabrik](https://download.geofabrik.de/) или берётся локально (`PBF_PATH`).
+2. **Advisory lock** в [PostgreSQL](https://www.postgresql.org/) — параллельные обновления не запускаются.
+3. **Расширения**: [PostGIS](https://postgis.net/) (пространственные типы и функции), `hstore`
+   (для osm2pgsql) и `pg_trgm` (нечёткий поиск) — применяются идемпотентно.
+4. **Импорт**: [`osm2pgsql`](https://osm2pgsql.org/) (`--create --hstore-all --latlong`) наполняет
+   таблицы `planet_osm_*` — это сырые данные OSM в БД.
+5. **Представления** (`internal/schema`): `geo.zones` (склейка мультиполигонов, упрощённая
+   геометрия), `geo.streets`, `geo.addresses`, `geo.names` (поисковый индекс имён) + индексы
+   GIST/`pg_trgm`; затем `ANALYZE`.
+6. **Тайлы**: [`tilemaker`](https://github.com/systemed/tilemaker) с профилем
+   [OpenMapTiles](https://openmaptiles.org/schema/) (`tiles/tilemaker/`) режет **тот же PBF**
+   в векторные тайлы (MVT, зумы 0–14) и пишет один архив
+   [PMTiles](https://github.com/protomaps/PMTiles) — `basemap-<время>.pmtiles` (temp + rename).
+7. **Манифесты** (атомарно): `tiles.json` — какой файл тайлов актуален; `state.json` — маркер
+   завершённого обновления.
+
+Запуск: вручную (`slup-geo update`), при старте (`UPDATE_ON_START=true`) или по cron
+(`UPDATE_SCHEDULE`) — внутри процесса `serve`.
+
+### Отдача данных — `slup-geo serve`
+
+Написан на Go (стандартная библиотека `net/http`), без внешних рантаймов:
+
+| Что | Откуда | Формат |
+|---|---|---|
+| `/v1/point`, `/v1/suggest`, `/v1/areas/{id}` | SQL-запросы к представлениям `geo.*` | JSON ([openapi.yaml](openapi.yaml)) |
+| `/tiles/basemap.pmtiles`, `/tiles/basemap-*.pmtiles` | собранные архивы | [PMTiles](https://github.com/protomaps/PMTiles) (Range) |
+| `/tiles/style.json` | `tiles/web/` в образе | стиль [OSM Bright](https://github.com/openmaptiles/osm-bright-gl-style) под MapLibre Style Spec |
+| `/tiles/sprite*`, `/tiles/fonts/...` | `tiles/web/` в образе | спрайт стиля и глифы [Noto](https://notofonts.github.io/) |
+
+На стороне браузера: [MapLibre GL JS](https://maplibre.org/) + плагин
+[pmtiles](https://github.com/protomaps/PMTiles) — читают архив по HTTP Range и рисуют по стилю.
+
+### Зависимости и лицензии
+
+| Компонент | Роль | Ссылка | Лицензия |
+|---|---|---|---|
+| OpenStreetMap (PBF) | данные | [openstreetmap.org](https://www.openstreetmap.org/) | ODbL 1.0 (атрибуция обязательна) |
+| PostgreSQL + PostGIS | БД и пространственные функции | [postgresql.org](https://www.postgresql.org/), [postgis.net](https://postgis.net/) | PostgreSQL License / GPL-2+ |
+| osm2pgsql | импорт PBF в БД | [osm2pgsql.org](https://osm2pgsql.org/) | GPL-2+ |
+| tilemaker | сборка векторных тайлов | [github.com/systemed/tilemaker](https://github.com/systemed/tilemaker) | FTWPL (в Debian — GPL-2+) |
+| OpenMapTiles (схема и профиль) | имена слоёв, конфиг tilemaker | [openmaptiles.org/schema](https://openmaptiles.org/schema/) | BSD-3-Clause |
+| PMTiles | формат архива тайлов | [github.com/protomaps/PMTiles](https://github.com/protomaps/PMTiles) | спецификация — CC0/public domain, реализации — BSD-3 |
+| OSM Bright | стиль карты | [github.com/openmaptiles/osm-bright-gl-style](https://github.com/openmaptiles/osm-bright-gl-style) | код BSD-3, дизайн CC-BY 4.0 |
+| Noto (глифы) | шрифты подписей | [notofonts.github.io](https://notofonts.github.io/) (глифы — [OpenFreeMap](https://openfreemap.org)) | SIL OFL 1.1 |
+| MapLibre GL JS + pmtiles JS | отрисовка на фронте | [maplibre.org](https://maplibre.org/) | BSD-3-Clause |
+| pgx, robfig/cron (Go) | драйвер БД, cron | [github.com/jackc/pgx](https://github.com/jackc/pgx), [github.com/robfig/cron](https://github.com/robfig/cron) | MIT |
+
+Полный список с версиями и текстами — [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
 
 **Данные** — один volume `geo_data`: PostgreSQL, PBF-кэш, тайлы и состояние. Пересоздание
 контейнера данные не теряет; полная очистка — `docker compose down -v`.
