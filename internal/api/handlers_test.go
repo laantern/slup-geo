@@ -333,7 +333,7 @@ func newTilesHandler(t *testing.T, tilesDir string) *TilesHandler {
 func TestStyleEndpointServesRelativeStyle(t *testing.T) {
 	handler := newTilesHandler(t, t.TempDir())
 	style := `{"sources":{"openmaptiles":{"url":"pmtiles:///tiles/basemap.pmtiles"}},` +
-		`"glyphs":"/tiles/fonts/{fontstack}/{range}.pbf","sprite":"/tiles/sprite"}`
+		`"glyphs":"/tiles/fonts/{fontstack}/{range}.pbf"}`
 	if err := os.WriteFile(filepath.Join(handler.WebDir, "style.json"), []byte(style), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +375,7 @@ func TestTilesAliasServesCurrentFile(t *testing.T) {
 	}
 }
 
-func TestFontsAndSpriteEndpoints(t *testing.T) {
+func TestFontsEndpoint(t *testing.T) {
 	handler := newTilesHandler(t, t.TempDir())
 	fontDir := filepath.Join(handler.WebDir, "fonts", "Noto Sans Regular")
 	if err := os.MkdirAll(fontDir, 0o755); err != nil {
@@ -384,21 +384,15 @@ func TestFontsAndSpriteEndpoints(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fontDir, "0-255.pbf"), []byte{0x0A, 0x01}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(handler.WebDir, "sprite.json"), []byte(`{"sprite":{}}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	if recorder := doRequest(t, handler, http.MethodGet, "/tiles/fonts/Noto%20Sans%20Regular/0-255.pbf", nil); recorder.Code != http.StatusOK {
 		t.Fatalf("глифы: статус = %d", recorder.Code)
-	}
-	if recorder := doRequest(t, handler, http.MethodGet, "/tiles/sprite.json", nil); recorder.Code != http.StatusOK {
-		t.Fatalf("спрайт: статус = %d", recorder.Code)
 	}
 	for _, target := range []string{
 		"/tiles/fonts/Noto%20Sans%20Regular/x.pbf",
 		"/tiles/fonts/Bad!Stack/0-255.pbf",
 		"/tiles/fonts/../../../etc/passwd",
-		"/tiles/sprite.bmp",
+		"/tiles/style.css",
 	} {
 		if recorder := doRequest(t, handler, http.MethodGet, target, nil); recorder.Code != http.StatusNotFound {
 			t.Fatalf("%s: статус = %d, ожидался 404", target, recorder.Code)

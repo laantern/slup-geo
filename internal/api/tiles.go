@@ -25,10 +25,10 @@ var (
 	fontRangePattern = regexp.MustCompile(`^\d+-\d+\.pbf$`)
 )
 
-// webFiles — статические веб-ассеты: стиль и файлы спрайта.
+// webFiles — статические веб-ассеты: стиль.
 // Стиль использует относительные ссылки (/tiles/...), поэтому работает за любым доменом.
 var webFiles = map[string]struct{}{
-	"style.json": {}, "sprite.json": {}, "sprite.png": {}, "sprite@2x.json": {}, "sprite@2x.png": {},
+	"style.json": {},
 }
 
 // TilesHandler отдаёт тайлы, манифест, стиль, спрайт и глифы.
@@ -38,7 +38,7 @@ var webFiles = map[string]struct{}{
 type TilesHandler struct {
 	// Dir — каталог тайлов (basemap-*.pmtiles, tiles.json).
 	Dir string
-	// WebDir — каталог веб-ассетов (style.json, sprite*, fonts/).
+	// WebDir — каталог веб-ассетов (style.json, fonts/).
 	WebDir string
 	Log    *slog.Logger
 }
