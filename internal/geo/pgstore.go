@@ -3,6 +3,7 @@ package geo
 import (
 	"context"
 	"math"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -16,6 +17,43 @@ type PGStore struct {
 // NewPGStore создаёт хранилище.
 func NewPGStore(pool *pgxpool.Pool) *PGStore {
 	return &PGStore{pool: pool}
+}
+
+// Ping проверяет соединение с БД (используется /health).
+func (s *PGStore) Ping(ctx context.Context) error {
+	return s.pool.Ping(ctx)
+}
+
+// SchemaReady проверяет, что представления geo собраны: без них API отвечать не может.
+func (s *PGStore) SchemaReady(ctx context.Context) (bool, error) {
+	var ready bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT to_regclass('geo.zones') IS NOT NULL
+		   AND to_regclass('geo.names') IS NOT NULL
+		   AND to_regclass('geo.addresses') IS NOT NULL
+		   AND to_regclass('geo.streets') IS NOT NULL`).Scan(&ready)
+	return ready, err
+}
+
+// SchemaVersion возвращает версию схемы данных из geo.meta (0 — метаданных нет).
+func (s *PGStore) SchemaVersion(ctx context.Context) (int, error) {
+	var exists bool
+	if err := s.pool.QueryRow(ctx, `SELECT to_regclass('geo.meta') IS NOT NULL`).Scan(&exists); err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, nil
+	}
+
+	var value string
+	err := s.pool.QueryRow(ctx, `SELECT value FROM geo.meta WHERE key = 'schema_version'`).Scan(&value)
+	if err == pgx.ErrNoRows {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(value)
 }
 
 // NearestHouse ищет дом в пределах 5 м от контура (точка внутри контура — расстояние 0).
@@ -360,11 +398,11 @@ WHERE a.street_be = s.name_be
 
 const housesByNumberSQL = housesSelectSQL + `
   AND lower(a.housenumber) = @housenumber
-ORDER BY length(a.housenumber), a.housenumber
+ORDER BY (a.osm_type = 'W') DESC, length(a.housenumber), a.housenumber
 LIMIT @limit`
 
 const housesFirstSQL = housesSelectSQL + `
-ORDER BY length(a.housenumber), a.housenumber
+ORDER BY (a.osm_type = 'W') DESC, length(a.housenumber), a.housenumber
 LIMIT @limit`
 
 const findStreetZonesSQL = `
@@ -390,7 +428,11 @@ WHERE z.osm_type = @type AND z.osm_id = @osmID
 UNION ALL
 SELECT 'HOUSE',
        a.osm_type || a.osm_id,
-       concat_ws(', ', a.housenumber, COALESCE(s.label, a.street_be)),
+       CASE
+         WHEN a.housenumber IS NULL OR btrim(a.housenumber) = '' THEN COALESCE(s.label, a.street_be)
+         WHEN s.label IS NOT NULL THEN s.label || ', д. ' || a.housenumber
+         ELSE 'д. ' || a.housenumber
+       END,
        'HOUSE',
        'BUILDING',
        round(ST_Area(a.geom::geography)),

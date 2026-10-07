@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Go-зависимости (включая x/text и др.).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-deps:
+        patterns: ["*"]
+
+  # Actions: пины по SHA обновляются автоматически.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Базовые образы Dockerfile, закреплённые по digest.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

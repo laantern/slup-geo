@@ -5,30 +5,46 @@ info:
     Гео-апплаенс Slup: внутренний API для монолита и публичные тайлы.
     Ручки `/v1/*` вызываются только из монолита по внутренней docker-сети;
     наружу (через nginx) выставлены только `/tiles/*`.
-  version: "1.0.0"
+
+    Версия — версия контракта API (semver): минорные и патч-версии не содержат
+    ломающих изменений. Не связана с тегами образа (`vX.Y.Z` в Docker Hub).
+  version: "1.1.0"
 
 paths:
   /health:
     get:
-      summary: Живость сервиса и БД
+      summary: "Готовность сервиса: БД + собранная схема geo"
+      description: |
+        `200` — данные готовы (`status: ok`). `503` — сервис жив, но отвечать не может:
+        `starting` (идёт первый импорт), `no_data` (данных ещё нет), `unavailable` (БД недоступна).
       responses:
         "200":
-          description: Сервис готов
+          description: Данные готовы
           content:
             application/json:
-              schema:
-                type: object
-                properties:
-                  status: { type: string, example: ok }
+              schema: { $ref: "#/components/schemas/Health" }
         "503":
-          description: БД недоступна
+          description: Сервис не готов (starting/no_data/unavailable)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /status:
+    get:
+      summary: Подробное состояние данных и последнего обновления
+      responses:
+        "200":
+          description: Диагностика (version, schemaReady, данные, последнее обновление)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Status" }
 
   /v1/point:
     get:
       summary: Локация точки — дом (в пределах 5 м от контура) и покрывающие зоны
       parameters:
-        - { name: lat, in: query, required: true, schema: { type: number, format: double } }
-        - { name: lon, in: query, required: true, schema: { type: number, format: double } }
+        - { name: lat, in: query, required: true, schema: { type: number, format: double, minimum: -90, maximum: 90 } }
+        - { name: lon, in: query, required: true, schema: { type: number, format: double, minimum: -180, maximum: 180 } }
       responses:
         "200":
           description: Локация точки
@@ -41,11 +57,14 @@ paths:
   /v1/suggest:
     get:
       summary: "Поисковые подсказки (до 10): админ-зоны/улицы, дома улицы, зоны улицы"
+      description: |
+        Запрос нормализуется (регистр, ё→е, пунктуация, «3я» = «3-я»). Минимальная длина —
+        по нормализованной строке (2), максимальная — 128 символов.
       parameters:
         - name: q
           in: query
           required: true
-          schema: { type: string, minLength: 2 }
+          schema: { type: string, minLength: 2, maxLength: 128 }
       responses:
         "200":
           description: Подсказки
@@ -63,10 +82,11 @@ paths:
           in: path
           required: true
           description: "W664945556 / N123 / W-3628814 (relations хранятся с отрицательным id)"
-          schema: { type: string }
+          schema: { type: string, pattern: "^[WNRwrn]-?[0-9]+$" }
         - name: simplify
           in: query
           required: false
+          description: Неизвестное значение — 400 (никаких «тихих» дефолтов)
           schema: { type: string, enum: [display, none], default: display }
       responses:
         "200":
@@ -91,10 +111,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/TilesManifest" }
+        "500":
+          description: Манифест повреждён (не отдаём битый JSON)
 
   /tiles/basemap.pmtiles:
     get:
-      summary: Алиас актуального архива тайлов (no-cache)
+      summary: Алиас актуального архива тайлов (max-age=60, ETag/Last-Modified)
       responses:
         "200":
           description: Актуальный файл тайлов
@@ -108,13 +130,48 @@ paths:
 
   /tiles/style.json:
     get:
-      summary: Стиль MapLibre (OSM Bright под схему OpenMapTiles, относительные ссылки)
+      summary: Стиль MapLibre (OSM Bright под схему OpenMapTiles)
+      description: Пути внутри стиля абсолютные (`/tiles/...`); при проксировании под подпутём поправьте их.
       responses:
         "200":
           description: MapLibre Style JSON
           content:
             application/json:
               schema: { type: object }
+
+  /tiles/fonts/{stack}/{range}:
+    get:
+      summary: Глифы подписей (Noto, SIL OFL 1.1)
+      parameters:
+        - { name: stack, in: path, required: true, schema: { type: string, example: "Noto Sans Regular" } }
+        - { name: range, in: path, required: true, schema: { type: string, pattern: "^[0-9]+-[0-9]+\\.pbf$" } }
+      responses:
+        "200":
+          description: Глифы
+          content:
+            application/x-protobuf:
+              schema: { type: string, format: binary }
+        "404":
+          description: Стек или диапазон отсутствует
+
+  /tiles/vendor/{file}:
+    get:
+      summary: Вендорные библиотеки карты (MapLibre ESM, pmtiles.js, CSS)
+      parameters:
+        - name: file
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [maplibre-gl.mjs, maplibre-gl-shared.mjs, maplibre-gl-worker.mjs, maplibre-gl.css, pmtiles.js]
+      responses:
+        "200":
+          description: Файл библиотеки
+          content:
+            text/javascript:
+              schema: { type: string, format: binary }
+        "404":
+          description: Файл не найден или не проходит whitelist
 
   /tiles/{file}:
     get:
@@ -149,6 +206,43 @@ components:
           schema: { $ref: "#/components/schemas/Problem" }
 
   schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, starting, no_data, unavailable] }
+        schemaReady: { type: boolean }
+        importedAt: { type: string, format: date-time, nullable: true }
+        lastUpdate: { $ref: "#/components/schemas/UpdateStatus" }
+
+    Status:
+      type: object
+      properties:
+        version: { type: string, example: "v0.2.0" }
+        schemaReady: { type: boolean }
+        database: { type: string, example: unavailable }
+        data: { $ref: "#/components/schemas/State" }
+        lastUpdate: { $ref: "#/components/schemas/UpdateStatus" }
+
+    State:
+      type: object
+      properties:
+        importedAt: { type: string, format: date-time }
+        pbf: { type: string }
+        pbfBytes: { type: integer, format: int64 }
+        tiles:
+          type: array
+          items: { $ref: "#/components/schemas/TileFile" }
+        schemaVersion: { type: integer }
+
+    UpdateStatus:
+      type: object
+      properties:
+        state: { type: string, enum: [running, ok, error] }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        error: { type: string }
+
     ZoneLevel:
       type: string
       enum: [HOUSE, RESIDENTIAL, NEIGHBOURHOOD, QUARTER, CITY_DISTRICT, CITY, SETTLEMENT, RAION, OBLAST, COUNTRY, LANDUSE, AREA]
@@ -212,7 +306,39 @@ components:
         kind: { $ref: "#/components/schemas/ZoneKind" }
         areaM2: { type: integer, format: int64 }
         geometry:
-          description: GeoJSON (Polygon/MultiPolygon)
+          description: |
+            GeoJSON: `Polygon`/`MultiPolygon` для зон и зданий; `Point` — для адресов-нод (`N…`).
+          oneOf:
+            - $ref: "#/components/schemas/GeoJSONPoint"
+            - $ref: "#/components/schemas/GeoJSONPolygon"
+            - $ref: "#/components/schemas/GeoJSONMultiPolygon"
+
+    GeoJSONPoint:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type: { type: string, enum: [Point] }
+        coordinates: { type: array, items: { type: number } }
+    GeoJSONPolygon:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type: { type: string, enum: [Polygon] }
+        coordinates: { type: array, items: { type: array, items: { type: array, items: { type: number } } } }
+    GeoJSONMultiPolygon:
+      type: object
+      required: [type, coordinates]
+      properties:
+        type: { type: string, enum: [MultiPolygon] }
+        coordinates: { type: array, items: { type: array, items: { type: array, items: { type: array, items: { type: number } } } } }
+
+    TileFile:
+      type: object
+      required: [name, sizeBytes, builtAt]
+      properties:
+        name: { type: string, example: "basemap-20261006T120000Z.pmtiles" }
+        sizeBytes: { type: integer, format: int64 }
+        builtAt: { type: string, format: date-time }
 
     TilesManifest:
       type: object
@@ -220,13 +346,7 @@ components:
       properties:
         files:
           type: array
-          items:
-            type: object
-            required: [name, sizeBytes, builtAt]
-            properties:
-              name: { type: string, example: "basemap-20261006T120000Z.pmtiles" }
-              sizeBytes: { type: integer, format: int64 }
-              builtAt: { type: string, format: date-time }
+          items: { $ref: "#/components/schemas/TileFile" }
         attribution: { type: string }
         generatedAt: { type: string, format: date-time }
 

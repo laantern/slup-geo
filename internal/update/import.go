@@ -5,13 +5,22 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/laantern/slup-geo/internal/db"
 )
 
-// importOSM пересоздаёт планета-таблицы и импортирует в них PBF.
-// osm2pgsql создаёт таблицы поверх существующих, поэтому сначала явно дропаем их
-// (каскадом уходят и матвью geo.*, которые затем пересобирает слой представлений).
+// Префиксы таблиц osm2pgsql: рабочие (planet_osm_*) и staging-таблицы импорта
+// (planet_osm_next_*). Импорт идёт в staging, замена рабочих таблиц — одной транзакцией.
+const (
+	planetPrefix  = "planet_osm"
+	stagingPrefix = "planet_osm_next"
+)
+
+// importOSM импортирует PBF в staging-таблицы, не трогая рабочие данные:
+// пока идёт импорт, API продолжает отвечать по прежним таблицам и матвью.
 func (u *Updater) importOSM(ctx context.Context, pbfPath string) error {
 	connConfig, err := pgx.ParseConfig(u.cfg.DatabaseDSN)
 	if err != nil {
@@ -24,17 +33,21 @@ func (u *Updater) importOSM(ctx context.Context, pbfPath string) error {
 	}
 	defer conn.Close(context.WithoutCancel(ctx)) //nolint:errcheck — закрываем на выходе
 
-	if _, err := conn.Exec(ctx, `DROP TABLE IF EXISTS
-		planet_osm_point, planet_osm_line, planet_osm_polygon, planet_osm_roads,
-		planet_osm_nodes, planet_osm_ways, planet_osm_rels
-		CASCADE`); err != nil {
-		return fmt.Errorf("удаление прежних таблиц OSM: %w", err)
+	// Хвосты прерванного импорта (SIGKILL, кончился диск) не должны мешать новому.
+	if _, err := conn.Exec(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS
+		%s_point, %s_line, %s_polygon, %s_roads,
+		%s_nodes, %s_ways, %s_rels
+		CASCADE`,
+		stagingPrefix, stagingPrefix, stagingPrefix, stagingPrefix,
+		stagingPrefix, stagingPrefix, stagingPrefix)); err != nil {
+		return fmt.Errorf("удаление staging-таблиц OSM: %w", err)
 	}
 
 	args := []string{
 		"--create",
 		"--hstore-all",
 		"--latlong",
+		"--prefix", stagingPrefix,
 		"--number-processes", fmt.Sprintf("%d", u.cfg.ImportProcesses),
 		"--host", connConfig.Host,
 		"--port", fmt.Sprintf("%d", connConfig.Port),
@@ -47,11 +60,60 @@ func (u *Updater) importOSM(ctx context.Context, pbfPath string) error {
 		env = append(env, "PGPASSWORD="+connConfig.Password)
 	}
 
-	u.log.Info("импорт osm2pgsql начат", "файл", pbfPath, "процессов", u.cfg.ImportProcesses)
+	u.log.Info("импорт osm2pgsql начат (staging)", "файл", pbfPath, "процессов", u.cfg.ImportProcesses)
 	if err := runCommand(ctx, "osm2pgsql", args, env); err != nil {
 		return err
 	}
 	u.log.Info("импорт osm2pgsql завершён")
+	return nil
+}
+
+// swapPlanetTables одной транзакцией заменяет рабочие таблицы OSM на staging-версию
+// и пересобирает представления geo. До коммита читатели видят прежние данные,
+// при любой ошибке транзакция откатывается и рабочие данные остаются нетронутыми.
+func (u *Updater) swapPlanetTables(ctx context.Context, views ...string) error {
+	var script strings.Builder
+	script.WriteString(`
+BEGIN;
+DROP TABLE IF EXISTS
+  planet_osm_point, planet_osm_line, planet_osm_polygon, planet_osm_roads,
+  planet_osm_nodes, planet_osm_ways, planet_osm_rels
+  CASCADE;
+ALTER TABLE planet_osm_next_point RENAME TO planet_osm_point;
+ALTER TABLE planet_osm_next_line RENAME TO planet_osm_line;
+ALTER TABLE planet_osm_next_polygon RENAME TO planet_osm_polygon;
+ALTER TABLE planet_osm_next_roads RENAME TO planet_osm_roads;
+DROP TABLE IF EXISTS planet_osm_next_nodes, planet_osm_next_ways, planet_osm_next_rels;
+`)
+	// Индексы сохраняют имена staging-таблиц после RENAME; возвращаем канонические имена,
+	// иначе следующий импорт не сможет создать одноимённые индексы.
+	script.WriteString(fmt.Sprintf(`
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT indexname FROM pg_indexes
+    WHERE schemaname = current_schema()
+      AND tablename LIKE '%[1]s%%'
+      AND indexname LIKE '%[2]s%%'
+  LOOP
+    EXECUTE format('ALTER INDEX %%I RENAME TO %%I', r.indexname,
+                   replace(r.indexname, '%[2]s', '%[1]s'));
+  END LOOP;
+END $$;
+`, planetPrefix+"_", stagingPrefix+"_"))
+	script.WriteString("\n")
+	for _, view := range views {
+		script.WriteString(view)
+		script.WriteString("\n")
+	}
+	script.WriteString("COMMIT;")
+
+	u.log.Info("замена таблиц OSM и пересборка представлений")
+	if err := db.ExecScript(ctx, u.cfg.DatabaseDSN, script.String()); err != nil {
+		return fmt.Errorf("замена таблиц OSM: %w", err)
+	}
+	u.log.Info("таблицы OSM заменены, представления geo пересобраны")
 	return nil
 }
 

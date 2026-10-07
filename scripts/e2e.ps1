@@ -128,6 +128,31 @@ Show "tiles: глифы" ($fontCode -eq "200") "http=$fontCode"
 $exampleCode = (& curl.exe -s -L -o NUL -w "%{http_code}" "$base/example")
 Show "example: страница" ($exampleCode -eq "200") "http=$exampleCode"
 
+$h = Invoke-RestMethod "$base/health"
+Show "health: importedAt и lastUpdate" ($null -ne $h.importedAt -and $null -ne $h.lastUpdate) ($h | ConvertTo-Json -Compress)
+
+$status = Invoke-RestMethod "$base/status"
+Show "status: schemaReady и данные" ($status.schemaReady -eq $true -and $null -ne $status.data.importedAt) ($status | ConvertTo-Json -Depth 4 -Compress)
+
+$longQ = "a" * 200
+try {
+    Invoke-RestMethod "$base/v1/suggest?q=$longQ" -ErrorAction Stop | Out-Null
+    Show "suggest: лимит длины q" $false "вернулось 200 вместо 400"
+} catch {
+    Show "suggest: лимит длины q" ($_.Exception.Response.StatusCode.value__ -eq 400) "http=$($_.Exception.Response.StatusCode.value__)"
+}
+
+try {
+    Invoke-RestMethod "$base/v1/areas/W-1?simplify=weird" -ErrorAction Stop | Out-Null
+    Show "areas: simplify enum" $false "вернулось 200 вместо 400"
+} catch {
+    Show "areas: simplify enum" ($_.Exception.Response.StatusCode.value__ -eq 400) "http=$($_.Exception.Response.StatusCode.value__)"
+}
+
+$vendorCode = (& curl.exe -s -o NUL -w "%{http_code}" "$base/tiles/vendor/maplibre-gl.mjs")
+$vendorType = (& curl.exe -s -o NUL -w "%{content_type}" "$base/tiles/vendor/maplibre-gl.mjs")
+Show "tiles: вендорные модули" ($vendorCode -eq "200" -and $vendorType -like "text/javascript*") "http=$vendorCode type=$vendorType"
+
 # Данные должны переживать пересоздание контейнера: БД и тайлы лежат в /data (volume).
 docker rm -f $Container | Out-Null
 docker run -d --name $Container -p "${Port}:8080" -v "${volume}:/data" $Image | Out-Null

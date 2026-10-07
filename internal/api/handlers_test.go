@@ -64,12 +64,19 @@ func (f *fakeStore) FindArea(context.Context, string, int64, bool) (*geo.AreaRow
 
 func (f *fakeStore) Ping(context.Context) error { return f.healthErr }
 
-func newTestRouter(t *testing.T, store *fakeStore, tilesDir string) *http.ServeMux {
+func (f *fakeStore) SchemaReady(context.Context) (bool, error) {
+	if f.healthErr != nil {
+		return false, f.healthErr
+	}
+	return true, nil
+}
+
+func newTestRouter(t *testing.T, store *fakeStore, tilesDir string) http.Handler {
 	t.Helper()
 	return newTestRouterWithWeb(t, store, tilesDir, t.TempDir(), true)
 }
 
-func newTestRouterWithWeb(t *testing.T, store *fakeStore, tilesDir, webDir string, exampleEnabled bool) *http.ServeMux {
+func newTestRouterWithWeb(t *testing.T, store *fakeStore, tilesDir, webDir string, exampleEnabled bool) http.Handler {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return NewRouter(&Handlers{
@@ -370,7 +377,7 @@ func TestTilesAliasServesCurrentFile(t *testing.T) {
 	if recorder.Body.String() != "PMTiles-new-" {
 		t.Fatalf("отдан не актуальный файл: %q", recorder.Body.String())
 	}
-	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "no-cache" {
+	if cacheControl := recorder.Header().Get("Cache-Control"); cacheControl != "public, max-age=60" {
 		t.Fatalf("cache-control = %s", cacheControl)
 	}
 }

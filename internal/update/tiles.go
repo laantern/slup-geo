@@ -24,45 +24,29 @@ const (
 	osmAttribution  = "© OpenStreetMap contributors"
 )
 
-// buildTiles собирает векторные тайлы из локального PBF (tilemaker, схема OpenMapTiles)
-// и обновляет манифест tiles.json.
-func (u *Updater) buildTiles(ctx context.Context, pbfPath string) ([]TileFile, error) {
-	if u.cfg.TilesEnabled {
-		if err := u.extractTiles(ctx, pbfPath); err != nil {
-			return nil, err
-		}
-	} else {
-		u.log.Warn("TILES_ENABLED=false — тайлы не пересобираются, отдаём прежние")
-	}
-
-	files, err := u.scanTiles()
-	if err != nil {
-		return nil, err
-	}
-	manifest := tilesManifest{
-		Files:       files,
-		Attribution: osmAttribution,
-		GeneratedAt: time.Now().UTC(),
-	}
-	if err := writeJSONAtomic(filepath.Join(u.cfg.TilesDir(), "tiles.json"), manifest); err != nil {
-		return nil, fmt.Errorf("запись tiles.json: %w", err)
-	}
-	return files, nil
+// builtTiles — собранный, но ещё не опубликованный файл тайлов.
+type builtTiles struct {
+	tmpPath string
+	name    string
 }
 
-// extractTiles запускает tilemaker: PBF → версионный basemap-*.pmtiles (temp + rename).
-// Промежуточные данные (--store) пишутся в каталог данных и удаляются после сборки.
-func (u *Updater) extractTiles(ctx context.Context, pbfPath string) error {
+// buildTiles собирает векторные тайлы из локального PBF (tilemaker, схема OpenMapTiles)
+// во временный файл. Публикация (rename в каталог тайлов + манифест) происходит после
+// успешной замены таблиц БД — см. publishTiles.
+func (u *Updater) buildTiles(ctx context.Context, pbfPath string) (*builtTiles, error) {
+	if !u.cfg.TilesEnabled {
+		u.log.Warn("TILES_ENABLED=false — тайлы не пересобираются, отдаём прежние")
+		return nil, nil
+	}
+
 	version := time.Now().UTC().Format("20060102T150405Z")
 	name := tilesFilePrefix + version + tilesFileSuffix
-	finalPath := filepath.Join(u.cfg.TilesDir(), name)
 
 	tmpDir := u.cfg.TmpDir()
 	storeDir := filepath.Join(tmpDir, "tilemaker")
 	if err := os.MkdirAll(storeDir, 0o755); err != nil {
-		return fmt.Errorf("создание временного каталога: %w", err)
+		return nil, fmt.Errorf("создание временного каталога: %w", err)
 	}
-	defer os.RemoveAll(tmpDir) // промежуточные данные больше не нужны
 
 	tmpPath := filepath.Join(tmpDir, name)
 	args := []string{
@@ -76,30 +60,67 @@ func (u *Updater) extractTiles(ctx context.Context, pbfPath string) error {
 
 	u.log.Info("сборка тайлов tilemaker начата", "pbf", pbfPath, "потоков", u.cfg.TilemakerThreads)
 	if err := runCommand(ctx, "tilemaker", args, os.Environ()); err != nil {
-		return err
+		return nil, err
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		return fmt.Errorf("публикация файла тайлов: %w", err)
-	}
+	u.log.Info("сборка тайлов завершена (ожидает публикации)", "файл", name)
+	return &builtTiles{tmpPath: tmpPath, name: name}, nil
+}
 
-	// Оставляем только свежий файл: старые версии не нужны, ссылка на актуальную — в tiles.json.
-	existing, err := filepath.Glob(filepath.Join(u.cfg.TilesDir(), tilesFilePrefix+"*"+tilesFileSuffix))
-	if err != nil {
-		return err
-	}
-	for _, path := range existing {
-		if filepath.Base(path) != name {
-			if err := os.Remove(path); err != nil {
-				u.log.Warn("не удалось удалить старый файл тайлов", "файл", path, "error", err)
-			}
+// publishTiles публикует собранный файл (если есть) и обновляет манифест.
+// Порядок важен: сначала rename и манифест, только потом удаление старых версий —
+// иначе манифест может сослаться на уже удалённый файл.
+func (u *Updater) publishTiles(built *builtTiles) ([]TileFile, error) {
+	var current *TileFile
+
+	if built != nil {
+		finalPath := filepath.Join(u.cfg.TilesDir(), built.name)
+		if err := os.Rename(built.tmpPath, finalPath); err != nil {
+			return nil, fmt.Errorf("публикация файла тайлов: %w", err)
+		}
+		info, err := os.Stat(finalPath)
+		if err != nil {
+			return nil, fmt.Errorf("проверка опубликованного файла тайлов: %w", err)
+		}
+		current = &TileFile{Name: built.name, SizeBytes: info.Size(), BuiltAt: info.ModTime().UTC()}
+	} else {
+		existing, err := u.scanTiles()
+		if err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			current = &existing[0]
 		}
 	}
 
-	u.log.Info("сборка тайлов завершена", "файл", name)
-	return nil
+	files := make([]TileFile, 0, 1)
+	if current != nil {
+		files = append(files, *current)
+	}
+	manifest := tilesManifest{
+		Files:       files,
+		Attribution: osmAttribution,
+		GeneratedAt: time.Now().UTC(),
+	}
+	if err := writeJSONAtomic(filepath.Join(u.cfg.TilesDir(), "tiles.json"), manifest, 0o644); err != nil {
+		return nil, fmt.Errorf("запись tiles.json: %w", err)
+	}
+
+	existing, err := filepath.Glob(filepath.Join(u.cfg.TilesDir(), tilesFilePrefix+"*"+tilesFileSuffix))
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range existing {
+		if current != nil && filepath.Base(path) == current.Name {
+			continue
+		}
+		if err := os.Remove(path); err != nil {
+			u.log.Warn("не удалось удалить старый файл тайлов", "файл", path, "error", err)
+		}
+	}
+	return files, nil
 }
 
-// scanTiles перечисляет актуальные файлы тайлов (новые первыми).
+// scanTiles перечисляет файлы тайлов (новые первыми).
 func (u *Updater) scanTiles() ([]TileFile, error) {
 	paths, err := filepath.Glob(filepath.Join(u.cfg.TilesDir(), tilesFilePrefix+"*"+tilesFileSuffix))
 	if err != nil {

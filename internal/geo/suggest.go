@@ -13,10 +13,13 @@ import (
 const (
 	suggestResultLimit = 10
 	minQueryLength     = 2
-	streetSearchLimit  = 5
-	housesLimit        = 3
-	zonesLimit         = 5
-	adminBonus         = 150
+	// maxQueryLength — защитный лимит длины запроса: нормализация и триграммы
+	// не должны обрабатывать килобайты текста на каждый запрос.
+	maxQueryLength    = 128
+	streetSearchLimit = 5
+	housesLimit       = 3
+	zonesLimit        = 5
+	adminBonus        = 150
 	// houseSearchStreetLimit — окно улиц для перебора при поиске номера дома:
 	// у одной улицы много way в разных городах, верхние позиции занимает самый крупный город.
 	houseSearchStreetLimit = 50
@@ -44,6 +47,9 @@ func NewSuggestService(store SearchStore) *SuggestService {
 // Suggest возвращает до 10 подсказок: админ-зоны/улицы по сквозному ранжированию,
 // затем дома найденной улицы → зоны улицы → оставшиеся зоны по имени.
 func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion, error) {
+	if utf8.RuneCountInString(raw) > maxQueryLength {
+		return nil, ErrInvalidQuery
+	}
 	nameNorm := Canon(raw)
 	if utf8.RuneCountInString(nameNorm) < minQueryLength {
 		return nil, ErrInvalidQuery
@@ -152,6 +158,9 @@ func (s *SuggestService) findHouses(
 }
 
 func appendHouses(items *[]Suggestion, usedIDs map[string]struct{}, streetLabel string, houses []HouseMatch) {
+	// N и W одного и того же адреса (точка и контур дома) дают одинаковую подпись —
+	// оставляем только первый вариант (SQL отдаёт контур раньше точки).
+	seen := make(map[string]struct{}, len(houses))
 	for _, house := range houses {
 		if len(*items) >= suggestResultLimit {
 			return
@@ -159,12 +168,18 @@ func appendHouses(items *[]Suggestion, usedIDs map[string]struct{}, streetLabel 
 		if _, used := usedIDs[house.ID]; used {
 			continue
 		}
-		usedIDs[house.ID] = struct{}{}
 
 		name := streetLabel
 		if house.Number != nil {
 			name = streetLabel + ", д. " + *house.Number
 		}
+		key := name + "|" + derefString(house.Subtitle)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		usedIDs[house.ID] = struct{}{}
+
 		*items = append(*items, Suggestion{
 			ID:       house.ID,
 			Name:     name,
@@ -176,6 +191,13 @@ func appendHouses(items *[]Suggestion, usedIDs map[string]struct{}, streetLabel 
 			Lon:      house.Lon,
 		})
 	}
+}
+
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func appendStreetZones(items *[]Suggestion, usedIDs map[string]struct{}, cityLabel *string, zones []ZoneMatch) {

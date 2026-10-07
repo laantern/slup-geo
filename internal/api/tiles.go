@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -26,9 +27,20 @@ var (
 )
 
 // webFiles — статические веб-ассеты: стиль.
-// Стиль использует относительные ссылки (/tiles/...), поэтому работает за любым доменом.
+// Стиль использует абсолютные ссылки (/tiles/...), поэтому работает за любым доменом
+// при размещении в корне (см. README: проксирование под подпутём требует правки путей).
 var webFiles = map[string]struct{}{
 	"style.json": {},
+}
+
+// vendorFiles — вендорные библиотеки карты (без CDN), с явными content-type:
+// модули MapLibre должны отдаваться как text/javascript.
+var vendorFiles = map[string]string{
+	"maplibre-gl.mjs":        "text/javascript; charset=utf-8",
+	"maplibre-gl-shared.mjs": "text/javascript; charset=utf-8",
+	"maplibre-gl-worker.mjs": "text/javascript; charset=utf-8",
+	"maplibre-gl.css":        "text/css; charset=utf-8",
+	"pmtiles.js":             "text/javascript; charset=utf-8",
 }
 
 // TilesHandler отдаёт тайлы, манифест, стиль, спрайт и глифы.
@@ -59,18 +71,25 @@ func (h *TilesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveWebFile(w, r, name, "no-cache")
 	case strings.HasPrefix(name, "fonts/"):
 		h.serveFont(w, r, strings.TrimPrefix(name, "fonts/"))
+	case strings.HasPrefix(name, "vendor/"):
+		h.serveVendor(w, r, strings.TrimPrefix(name, "vendor/"))
 	default:
 		h.serveVersionedTiles(w, r, name)
 	}
 }
 
-// serveManifest отдаёт tiles.json; пока тайлы не собраны — пустой валидный ответ.
+// serveManifest отдаёт tiles.json; пока тайлы не собраны — пустой валидный ответ,
+// а повреждённый манифест — это ошибка (карта по нему не построится).
 func (h *TilesHandler) serveManifest(w http.ResponseWriter, r *http.Request) {
 	path := filepath.Join(h.Dir, "tiles.json")
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		h.Log.Warn("tiles.json не найден, отдаём пустой манифест", "error", err)
 		payload = []byte(`{"files":[],"attribution":"© OpenStreetMap contributors"}`)
+	} else if !json.Valid(payload) {
+		h.Log.Error("tiles.json повреждён — манифест не отдаём", "файл", path)
+		http.Error(w, "tiles manifest is corrupted", http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -90,7 +109,8 @@ func (h *TilesHandler) serveCurrentTiles(w http.ResponseWriter, r *http.Request)
 	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
 
 	w.Header().Set("Content-Type", "application/vnd.pmtiles")
-	w.Header().Set("Cache-Control", "no-cache")
+	// Короткий кэш: алиас стабилен, но после обновления должен быстро переключиться на новый файл.
+	w.Header().Set("Cache-Control", "public, max-age=60")
 	http.ServeFile(w, r, paths[0])
 }
 
@@ -119,7 +139,24 @@ func (h *TilesHandler) serveFont(w http.ResponseWriter, r *http.Request, rest st
 		http.NotFound(w, r)
 		return
 	}
-	h.serveWebFile(w, r, filepath.Join("fonts", parts[0], parts[1]), "public, max-age=604800")
+	h.serveWebFile(w, r, filepath.Join("fonts", parts[0], parts[1]), "public, max-age=86400")
+}
+
+// serveVendor отдаёт вендорные библиотеки карты с корректным content-type.
+func (h *TilesHandler) serveVendor(w http.ResponseWriter, r *http.Request, name string) {
+	contentType, ok := vendorFiles[name]
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	path := filepath.Join(h.WebDir, "vendor", name)
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=604800")
+	http.ServeFile(w, r, path)
 }
 
 // serveWebFile отдаёт статический файл из каталога веб-ассетов.

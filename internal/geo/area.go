@@ -16,6 +16,7 @@ type AreaRef struct {
 var areaRefTypes = map[string]struct{}{"W": {}, "N": {}, "R": {}}
 
 // ParseAreaRef разбирает идентификатор вида W664945556 (relations хранятся с отрицательным id).
+// После буквы типа допускаются только цифры (возможно, с ведущим минусом): «W+123» отклоняется.
 func ParseAreaRef(id string) (AreaRef, error) {
 	if id == "" {
 		return AreaRef{}, ErrInvalidID
@@ -24,7 +25,22 @@ func ParseAreaRef(id string) (AreaRef, error) {
 	if _, ok := areaRefTypes[areaType]; !ok {
 		return AreaRef{}, ErrInvalidID
 	}
-	osmID, err := strconv.ParseInt(id[1:], 10, 64)
+
+	rest := id[1:]
+	digits := rest
+	if strings.HasPrefix(rest, "-") {
+		digits = rest[1:]
+	}
+	if digits == "" {
+		return AreaRef{}, ErrInvalidID
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return AreaRef{}, ErrInvalidID
+		}
+	}
+
+	osmID, err := strconv.ParseInt(rest, 10, 64)
 	if err != nil {
 		return AreaRef{}, ErrInvalidID
 	}

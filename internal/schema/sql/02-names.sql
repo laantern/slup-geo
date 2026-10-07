@@ -57,3 +57,11 @@ WHERE btrim(name_norm) <> '';
 CREATE INDEX names_norm_trgm_idx ON geo.names USING gin (name_norm gin_trgm_ops);
 CREATE INDEX names_norm_prefix_idx ON geo.names (name_norm text_pattern_ops);
 CREATE UNIQUE INDEX names_entity_uidx ON geo.names (entity_kind, entity_id, name_norm);
+
+-- Метаданные схемы: версия проверяется сервисом при старте (см. internal/schema).
+CREATE TABLE IF NOT EXISTS geo.meta (
+  key   text PRIMARY KEY,
+  value text NOT NULL
+);
+INSERT INTO geo.meta (key, value) VALUES ('schema_version', '1')
+ON CONFLICT (key) DO UPDATE SET value = excluded.value;

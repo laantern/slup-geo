@@ -1,14 +1,18 @@
 -- Отладка локации точки внутри контейнера (psql):
---   docker compose exec -T geo psql -U geo_user -d geo_db -v lon=30.96 -v lat=52.39 < scripts/debug-point.sql
+--   docker exec -i <контейнер> psql -U geo_user -d geo_db -v lon=30.96 -v lat=52.39 < scripts/debug-point.sql
 -- Показывает дом (если в пределах 5 м от контура) и содержащие зоны по возрастанию площади —
--- те же данные, что собирает GET /v1/point.
+-- те же данные, что собирает GET /v1/point (имя дома — в том же формате).
 \timing on
 WITH p AS (
   SELECT ST_SetSRID(ST_MakePoint(:'lon'::float8, :'lat'::float8), 4326) AS g
 ),
 house AS (
   SELECT a.osm_type || a.osm_id AS id,
-         concat_ws(', ', a.housenumber, COALESCE(s.label, a.street_be)) AS name,
+         CASE
+           WHEN a.housenumber IS NULL OR btrim(a.housenumber) = '' THEN COALESCE(s.label, a.street_be)
+           WHEN s.label IS NOT NULL THEN s.label || ', д. ' || a.housenumber
+           ELSE 'д. ' || a.housenumber
+         END AS name,
          'HOUSE' AS level, 'BUILDING' AS kind,
          round(ST_Area(a.geom::geography)) AS area_m2,
          0 AS grp
