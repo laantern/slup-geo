@@ -6,10 +6,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/laantern/slup-geo/internal/db"
+	"github.com/laantern/slup-geo/internal/schema"
 )
 
 // Префиксы таблиц osm2pgsql: рабочие (planet_osm_*) и staging-таблицы импорта
@@ -68,10 +70,30 @@ func (u *Updater) importOSM(ctx context.Context, pbfPath string) error {
 	return nil
 }
 
-// swapPlanetTables одной транзакцией заменяет рабочие таблицы OSM на staging-версию
-// и пересобирает представления geo. До коммита читатели видят прежние данные,
-// при любой ошибке транзакция откатывается и рабочие данные остаются нетронутыми.
-func (u *Updater) swapPlanetTables(ctx context.Context, views ...string) error {
+// buildViewsStaging собирает матвью по staging-таблицам под временными именами geo.*_next.
+// Выполняется ВНЕ транзакции: пересборка данных идёт минуты, но читатели API не блокируются —
+// они продолжают работать по старым каноническим матвью. Хвосты прерванной сборки
+// пересоздаются (DROP IF EXISTS в начале скрипта).
+func (u *Updater) buildViewsStaging(ctx context.Context) error {
+	views, err := schema.ViewsStaging()
+	if err != nil {
+		return err
+	}
+
+	started := time.Now()
+	u.log.Info("сборка staging-представлений начата (читатели не блокируются)")
+	if err := db.ExecScripts(ctx, u.cfg.DatabaseDSN, views...); err != nil {
+		return fmt.Errorf("staging-представления: %w", err)
+	}
+	u.log.Info("сборка staging-представлений завершена", "за", time.Since(started).Round(time.Second).String())
+	return nil
+}
+
+// swapPlanetTables одной короткой транзакцией заменяет рабочие таблицы и матвью на staging-версии.
+// В транзакции только метаданные (DROP старых + RENAME), без пересборки данных: читатели
+// блокируются на доли секунды, а не на минуты импорта. При любой ошибке — полный откат,
+// рабочие данные остаются нетронутыми.
+func (u *Updater) swapPlanetTables(ctx context.Context) error {
 	var script strings.Builder
 	script.WriteString(`
 BEGIN;
@@ -84,36 +106,38 @@ ALTER TABLE planet_osm_next_line RENAME TO planet_osm_line;
 ALTER TABLE planet_osm_next_polygon RENAME TO planet_osm_polygon;
 ALTER TABLE planet_osm_next_roads RENAME TO planet_osm_roads;
 DROP TABLE IF EXISTS planet_osm_next_nodes, planet_osm_next_ways, planet_osm_next_rels;
+ALTER MATERIALIZED VIEW geo.zones_next RENAME TO zones;
+ALTER MATERIALIZED VIEW geo.streets_next RENAME TO streets;
+ALTER MATERIALIZED VIEW geo.addresses_next RENAME TO addresses;
+ALTER MATERIALIZED VIEW geo.names_next RENAME TO names;
 `)
-	// Индексы сохраняют имена staging-таблиц после RENAME; возвращаем канонические имена,
-	// иначе следующий импорт не сможет создать одноимённые индексы.
-	script.WriteString(fmt.Sprintf(`
+	// Индексы сохраняют staging-имена после RENAME объектов; возвращаем канонические имена
+	// (старые освободились вместе с удалёнными таблицами/матвью), иначе следующий импорт
+	// не сможет создать одноимённые индексы.
+	script.WriteString(`
 DO $$
 DECLARE r record;
 BEGIN
   FOR r IN
-    SELECT indexname FROM pg_indexes
-    WHERE schemaname = current_schema()
-      AND tablename LIKE '%[1]s%%'
-      AND indexname LIKE '%[2]s%%'
+    SELECT schemaname, indexname FROM pg_indexes
+    WHERE schemaname IN ('public', 'geo')
+      AND tablename IN ('planet_osm_point', 'planet_osm_line', 'planet_osm_polygon', 'planet_osm_roads',
+                        'zones', 'streets', 'addresses', 'names')
+      AND indexname LIKE '%\_next\_%' ESCAPE '\'
   LOOP
-    EXECUTE format('ALTER INDEX %%I RENAME TO %%I', r.indexname,
-                   replace(r.indexname, '%[2]s', '%[1]s'));
+    EXECUTE format('ALTER INDEX %I.%I RENAME TO %I', r.schemaname, r.indexname,
+                   replace(r.indexname, '_next_', '_'));
   END LOOP;
 END $$;
-`, planetPrefix+"_", stagingPrefix+"_"))
-	script.WriteString("\n")
-	for _, view := range views {
-		script.WriteString(view)
-		script.WriteString("\n")
-	}
-	script.WriteString("COMMIT;")
+COMMIT;
+`)
 
-	u.log.Info("замена таблиц OSM и пересборка представлений")
+	started := time.Now()
+	u.log.Info("замена таблиц и представлений начата (короткая транзакция)")
 	if err := db.ExecScript(ctx, u.cfg.DatabaseDSN, script.String()); err != nil {
 		return fmt.Errorf("замена таблиц OSM: %w", err)
 	}
-	u.log.Info("таблицы OSM заменены, представления geo пересобраны")
+	u.log.Info("таблицы и представления заменены", "за", time.Since(started).Round(time.Millisecond).String())
 	return nil
 }
 

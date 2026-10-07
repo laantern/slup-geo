@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -46,6 +47,10 @@ type Status struct {
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	Error      string     `json:"error,omitempty"`
 }
+
+// statusErrorLimit — сколько символов ошибки хранить в status.json: полный хвост вывода
+// внешних утилит остаётся в логах, а /health и /status не должны раздуваться.
+const statusErrorLimit = 500
 
 // Updater выполняет полный цикл обновления данных.
 type Updater struct {
@@ -89,7 +94,7 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 		status.FinishedAt = &finished
 		if err != nil {
 			status.State = "error"
-			status.Error = err.Error()
+			status.Error = truncateRunes(err.Error(), statusErrorLimit)
 		} else {
 			status.State = "ok"
 		}
@@ -99,10 +104,6 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 	}()
 
 	extensions, err := schema.Extensions()
-	if err != nil {
-		return err
-	}
-	views, err := schema.Views()
 	if err != nil {
 		return err
 	}
@@ -129,7 +130,10 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 	if err := u.importOSM(ctx, pbf.path); err != nil {
 		return fmt.Errorf("импорт OSM: %w", err)
 	}
-	if err := u.swapPlanetTables(ctx, views...); err != nil {
+	if err := u.buildViewsStaging(ctx); err != nil {
+		return err
+	}
+	if err := u.swapPlanetTables(ctx); err != nil {
 		return err
 	}
 	if _, err := pool.Exec(ctx, "ANALYZE geo.zones, geo.streets, geo.addresses, geo.names"); err != nil {
@@ -191,7 +195,12 @@ func (u *Updater) lock(ctx context.Context, pool *pgxpool.Pool) (func(), error) 
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
-			u.log.Warn("не удалось снять advisory lock", "error", err)
+			// Соединение с удержанным локом нельзя возвращать в пул — закрываем его.
+			u.log.Warn("не удалось снять advisory lock — соединение закрывается", "error", err)
+			if raw := conn.Hijack(); raw != nil {
+				_ = raw.Close(context.WithoutCancel(ctx))
+			}
+			return
 		}
 		conn.Release()
 	}, nil
@@ -205,6 +214,55 @@ func (u *Updater) writeState(state State) error {
 // writeStatus атомарно пишет статус последней попытки обновления.
 func (u *Updater) writeStatus(status Status) error {
 	return writeJSONAtomic(u.cfg.StatusPath(), status, 0o600)
+}
+
+// ClearStaleStatus помечает незавершённое обновление как прерванное, если advisory lock свободен.
+// Нужен после жёсткого останова (SIGKILL, kill контейнера): без этого /health может вечно
+// показывать «starting», а /status — «running», хотя никакого обновления не идёт.
+// Проверка по advisory lock, а не по pid: она одинаково работает и внутри контейнера, и на хосте.
+func ClearStaleStatus(ctx context.Context, pool *pgxpool.Pool, statusPath string, log *slog.Logger) {
+	payload, err := os.ReadFile(statusPath)
+	if err != nil {
+		return
+	}
+	var status Status
+	if err := json.Unmarshal(payload, &status); err != nil || status.State != "running" {
+		return
+	}
+
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		log.Warn("не удалось проверить незавершённое обновление", "error", err)
+		return
+	}
+	defer conn.Release()
+
+	var acquired bool
+	if err := conn.QueryRow(ctx, "SELECT pg_try_advisory_lock($1)", advisoryLockKey).Scan(&acquired); err != nil {
+		log.Warn("не удалось проверить advisory lock обновления", "error", err)
+		return
+	}
+	if !acquired {
+		return // обновление действительно выполняется
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
+		// Соединение с удержанным локом нельзя возвращать в пул — закрываем его.
+		log.Warn("не удалось снять advisory lock — соединение закрывается", "error", err)
+		if raw := conn.Hijack(); raw != nil {
+			_ = raw.Close(context.WithoutCancel(ctx))
+		}
+		return
+	}
+
+	finished := time.Now().UTC()
+	status.State = "error"
+	status.Error = "обновление прервано (процесс не завершился)"
+	status.FinishedAt = &finished
+	if err := writeJSONAtomic(statusPath, status, 0o600); err != nil {
+		log.Warn("не удалось записать статус обновления", "error", err)
+		return
+	}
+	log.Warn("найден незавершённый статус обновления — помечен как прерванный", "начато", status.StartedAt)
 }
 
 // writeJSONAtomic пишет JSON атомарно (temp + fsync + rename + fsync каталога).
@@ -243,4 +301,13 @@ func writeJSONAtomic(path string, value any, perm os.FileMode) error {
 		_ = dir.Close()
 	}
 	return nil
+}
+
+// truncateRunes обрезает строку по числу символов (не разрывая UTF-8).
+func truncateRunes(s string, limit int) string {
+	if utf8.RuneCountInString(s) <= limit {
+		return s
+	}
+	runes := []rune(s)
+	return string(runes[:limit]) + "…"
 }

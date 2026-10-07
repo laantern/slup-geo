@@ -1,6 +1,14 @@
 -- Минимальные planet_osm_* таблицы с эталонными объектами для CI-проверки SQL-схемы geo.
 -- Повторяет структуру, которую создаёт osm2pgsql --hstore-all --latlong (только нужные колонки).
-DROP TABLE IF EXISTS planet_osm_point, planet_osm_line, planet_osm_polygon CASCADE;
+DROP TABLE IF EXISTS planet_osm_point, planet_osm_line, planet_osm_polygon, planet_osm_roads CASCADE;
+
+CREATE TABLE planet_osm_roads (
+    osm_id  bigint,
+    name    text,
+    highway text,
+    tags    hstore,
+    way     geometry(Geometry, 4326)
+);
 
 CREATE TABLE planet_osm_polygon (
     osm_id   bigint,
@@ -24,6 +32,10 @@ CREATE TABLE planet_osm_point (
     tags   hstore,
     way    geometry(Geometry, 4326)
 );
+
+-- osm2pgsql создаёт индексы на выходных таблицах — воспроизводим и проверяем их переименование.
+CREATE INDEX planet_osm_point_way_idx ON planet_osm_point USING gist (way);
+CREATE INDEX planet_osm_polygon_way_idx ON planet_osm_polygon USING gist (way);
 
 -- Область с русским именем (проверяет name:ru в matview zones).
 INSERT INTO planet_osm_polygon (osm_id, name, boundary, landuse, tags, way) VALUES

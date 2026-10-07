@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"time"
 )
 
@@ -48,6 +49,15 @@ func (u *Updater) ensurePBF(ctx context.Context) (pbfFile, error) {
 			return pbfFile{}, err
 		}
 		u.log.Info("используется локальный PBF (PBF_URL не задан)", "файл", u.cfg.PBFPath)
+		return pbfFile{path: u.cfg.PBFPath, size: stat.Size()}, nil
+	}
+	// ro bind-mount: скачивание всё равно не сможет заменить файл — не тратим трафик и время.
+	if exists && !isWritable(u.cfg.PBFPath) {
+		if err := validatePBF(u.cfg.PBFPath); err != nil {
+			return pbfFile{}, err
+		}
+		u.log.Warn("PBF_PATH доступен только для чтения — скачивание невозможно, используем файл как есть",
+			"файл", u.cfg.PBFPath, "байт", stat.Size())
 		return pbfFile{path: u.cfg.PBFPath, size: stat.Size()}, nil
 	}
 
@@ -101,7 +111,7 @@ func (u *Updater) downloadPBF(ctx context.Context, cached os.FileInfo) (bool, er
 			return false, ctx.Err()
 		}
 		if attempt > 1 {
-			u.log.Warn("повтор загрузки PBF", "попытка", attempt, "ошибка", lastErr)
+			u.log.Warn("повтор загрузки PBF", "попытка", attempt, "ошибка", sanitizeError(lastErr))
 			select {
 			case <-ctx.Done():
 				return false, ctx.Err()
@@ -115,7 +125,7 @@ func (u *Updater) downloadPBF(ctx context.Context, cached os.FileInfo) (bool, er
 		}
 		lastErr = err
 	}
-	return false, fmt.Errorf("загрузка PBF: %w", lastErr)
+	return false, fmt.Errorf("загрузка PBF: %w", sanitizeError(lastErr))
 }
 
 func (u *Updater) tryDownloadPBF(ctx context.Context, client *http.Client, source *url.URL, cached os.FileInfo) (bool, error) {
@@ -190,7 +200,8 @@ func (u *Updater) tryDownloadPBF(ctx context.Context, client *http.Client, sourc
 func parsePBFURL(raw string) (*url.URL, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("разбор PBF_URL: %w", err)
+		// Не оборачиваем ошибку url.Parse: её текст содержит URL целиком (возможно, с паролем).
+		return nil, fmt.Errorf("PBF_URL некорректен: проверьте формат URL")
 	}
 	switch parsed.Scheme {
 	case "https":
@@ -239,17 +250,57 @@ func validatePBF(path string) error {
 	return nil
 }
 
-// redactURL убирает из URL учётные данные перед логированием и записью в состояние.
+// redactURL убирает из URL учётные данные и query (там бывают токены) перед логированием
+// и записью в состояние.
 func redactURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User == nil {
-		return raw
+	if err != nil {
+		return redactText(raw)
 	}
-	parsed.User = nil
-	return parsed.String()
+	if parsed.User != nil {
+		parsed.User = nil
+	}
+	return redactText(parsed.String())
+}
+
+// urlUserinfo / urlQuery — маскирование чувствительных частей URL в текстах ошибок:
+// PBF_URL может содержать учётные данные или токен, они не должны попадать в логи и /status.
+var (
+	urlUserinfo = regexp.MustCompile(`(https?://)[^@\s/]+@`)
+	urlQuery    = regexp.MustCompile(`\?[^\s"']+`)
+)
+
+// redactText маскирует userinfo и query-часть у всех URL внутри строки.
+func redactText(s string) string {
+	s = urlUserinfo.ReplaceAllString(s, "$1***@")
+	s = urlQuery.ReplaceAllString(s, "?***")
+	return s
+}
+
+// redactedError — ошибка с уже замаскированными URL.
+type redactedError struct{ msg string }
+
+func (e redactedError) Error() string { return e.msg }
+
+// sanitizeError возвращает ошибку с замаскированными URL (для логов и status.json).
+func sanitizeError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return redactedError{redactText(err.Error())}
+}
+
+// isWritable проверяет, можно ли перезаписать файл (ro bind-mount, права).
+func isWritable(path string) bool {
+	file, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return false
+	}
+	_ = file.Close()
+	return true
 }
 
 func copyWithProgress(ctx context.Context, dst io.Writer, src io.Reader, total int64, u *Updater) (int64, error) {

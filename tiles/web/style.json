@@ -48,7 +48,8 @@
   "sources": {
     "openmaptiles": {
       "type": "vector",
-      "url": "pmtiles:///tiles/basemap.pmtiles"
+      "url": "pmtiles:///tiles/basemap.pmtiles",
+      "attribution": "© OpenMapTiles · © OpenStreetMap contributors"
     }
   },
   "glyphs": "/tiles/fonts/{fontstack}/{range}.pbf",

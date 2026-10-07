@@ -17,9 +17,10 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL]
     # Порт нужен только если обращаетесь к сервису с хоста (например, к /example).
-    # В docker-сети монолит ходит на http://geo:8080 — публикация не требуется.
-    ports:
-      - "8080:8080"
+    # В docker-сети монолит ходит на http://geo:8080 — публикация не требуется:
+    # вместе с портом наружу окажутся неаутентифицированные /v1/*, /health и /status.
+    # ports:
+    #   - "8080:8080"
     environment:
       PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
       # TZ: Europe/Minsk          # влияет на расписание UPDATE_SCHEDULE (по умолчанию UTC)

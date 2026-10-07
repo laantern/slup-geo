@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Entrypoint апплаенса slup-geo:
 #   1) стартует встроенный PostgreSQL (initdb при пустом volume), слушающий только loopback;
-#   2) готовит роли БД: geo_user — владелец данных (update), geo_reader — только SELECT (serve);
-#   3) при пустой БД или UPDATE_ON_START выполняет первый импорт/обновление;
+#   2) готовит роли БД: geo_owner — владелец данных (update), geo_reader — только SELECT (serve),
+#      geo_user — администратор образа (приложению его пароль не выдаётся);
+#   3) первый импорт выполняет синхронно; UPDATE_ON_START при готовой схеме — фоном, не останавливая serve;
 #   4) запускает HTTP-сервис; периодичность обновлений задаёт UPDATE_SCHEDULE (внутри serve).
 set -Eeo pipefail
 umask 077
@@ -31,7 +32,7 @@ mkdir -p "$PGDATA" "$DATA_DIR/osm" "$DATA_DIR/tiles" "$DATA_DIR/state" "$DATA_DI
 chown -R "$APP_USER" "$DATA_DIR/osm" "$DATA_DIR/tiles" "$DATA_DIR/state" "$DATA_DIR/tmp" 2>/dev/null || true
 
 # Пароль geo_user: из ENV или сгенерированный при первом старте и сохранённый в volume.
-# Наружу не публикуется — внутри контейнера им пользуются PostgreSQL и update.
+# Файл остаётся root-only (0600): админ-пароль не должен быть доступен процессам приложения.
 db_password_file="$DATA_DIR/state/db_password"
 if [ -n "${POSTGRES_PASSWORD:-}" ]; then
     db_password="$POSTGRES_PASSWORD"
@@ -42,6 +43,9 @@ else
 fi
 printf '%s' "$db_password" > "$db_password_file"
 chmod 600 "$db_password_file"
+# chown -R по state выполняется раньше и мог вернуть файл slup'у на повторных стартах —
+# админ-пароль обязан оставаться root-only (см. SECURITY.md).
+chown 0:0 "$db_password_file" 2>/dev/null || true
 export POSTGRES_PASSWORD="$db_password"
 export PGPASSWORD="$db_password"
 
@@ -64,7 +68,8 @@ else
 fi
 printf '%s' "$owner_password" > "$owner_password_file"
 chmod 600 "$owner_password_file"
-chown "$APP_USER" "$db_password_file" "$reader_password_file" "$owner_password_file" 2>/dev/null || true
+# Читаемые приложению — только пароли его ролей (для ручного docker exec).
+chown "$APP_USER" "$reader_password_file" "$owner_password_file" 2>/dev/null || true
 
 # Хвосты прерванных загрузок/сборок не должны мешать новому запуску.
 rm -f "$DATA_DIR"/osm/*.part
@@ -106,8 +111,8 @@ if [ "$ready" != "true" ]; then
     exit 1
 fi
 
-# Административные операции — от суперпользователя (POSTGRES_USER) по TCP:
-# loopback в образе доверенный, но пароль всё равно передаём — работает при любой pg_hba.
+# Административные операции — от суперпользователя (POSTGRES_USER) по TCP с паролем:
+# работает при любой pg_hba, включая ужесточённую ниже.
 admin_psql() {
     PGPASSWORD="$db_password" psql -q -v ON_ERROR_STOP=1 -h "$PGHOST" -p "$PGPORT" \
         -U "$POSTGRES_USER" -d "$POSTGRES_DB" "$@"
@@ -158,37 +163,69 @@ GRANT USAGE ON SCHEMA geo TO geo_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA geo TO geo_reader;
 ALTER DEFAULT PRIVILEGES FOR ROLE geo_owner IN SCHEMA geo GRANT SELECT ON TABLES TO geo_reader;
 SQL
+
+    # Ужесточаем pg_hba: loopback и локальный сокет — только scram. Иначе любой процесс
+    # в контейнере (uid slup) заходит суперпользователем без пароля, и роль-модель не работает.
+    # Заодно приводим postgresql.conf в соответствие с CLI-оверрайдом listen_addresses,
+    # иначе reload логирует «parameter cannot be changed without restarting».
+    conf="$PGDATA/postgresql.conf"
+    if [ -f "$conf" ]; then
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*listen_addresses[[:space:]]*=.*$|listen_addresses = '127.0.0.1'|" "$conf"
+    fi
+    hba="$PGDATA/pg_hba.conf"
+    if [ -f "$hba" ]; then
+        sed -i -E \
+            -e 's|^(local[[:space:]]+all[[:space:]]+all[[:space:]]+).*$|\1scram-sha-256|' \
+            -e 's|^(host[[:space:]]+all[[:space:]]+all[[:space:]]+127\.0\.0\.1/32[[:space:]]+).*$|\1scram-sha-256|' \
+            -e 's|^(host[[:space:]]+all[[:space:]]+all[[:space:]]+::1/128[[:space:]]+).*$|\1scram-sha-256|' \
+            "$hba"
+        admin_psql -c "SELECT pg_reload_conf();" >/dev/null
+        echo "[entrypoint] pg_hba: локальные подключения требуют пароль (scram)"
+    fi
 fi
 
-# Первый импорт: пустая БД (нет схемы geo) или явный UPDATE_ON_START.
-# Проверяем именно БД, а не файл-маркер: маркер без базы (или наоборот) не должен усыплять сервис.
+# Команда и окружение обновления: geo_owner + его пароль, без админ-пароля в окружении.
+# В режиме внешней БД убираем и PGPASSWORD (иначе пароль встроенной БД унаследуется детьми).
+if [ -n "${DATABASE_URL:-}" ]; then
+    update_env=(env -u POSTGRES_PASSWORD -u PGPASSWORD)
+else
+    update_env=(env -u POSTGRES_PASSWORD PGUSER=geo_owner PGPASSWORD="$owner_password")
+fi
+update_cmd=(gosu "$APP_USER" slup-geo update)
+
+# Первый импорт: пустая БД (нет схемы geo).
+# Провал — завершаемся с кодом 1: restart-политика повторит попытку, а не оставит 503 no_data навсегда.
 schema_ready="false"
 if psql -h "$PGHOST" -p "$PGPORT" -U "$POSTGRES_USER" -d "$POSTGRES_DB" -tAc "SELECT to_regclass('geo.zones') IS NOT NULL" 2>/dev/null | grep -q '^t$'; then
     schema_ready="true"
 fi
 
-if [ "$schema_ready" != "true" ] || is_true "${UPDATE_ON_START:-false}"; then
-    echo "[entrypoint] первый импорт/обновление данных (PBF → PostGIS → представления → тайлы)"
-    if [ -n "${DATABASE_URL:-}" ]; then
-        gosu "$APP_USER" slup-geo update &
-    else
-        env PGUSER=geo_owner PGPASSWORD="$owner_password" gosu "$APP_USER" slup-geo update &
-    fi
+if [ "$schema_ready" != "true" ]; then
+    echo "[entrypoint] первый импорт данных (PBF → PostGIS → представления → тайлы)"
+    # Фоном, чтобы SIGTERM во время импорта доходил до update (trap знает UPDATE_PID).
+    "${update_env[@]}" "${update_cmd[@]}" &
     UPDATE_PID=$!
     if ! wait "$UPDATE_PID"; then
-        echo "[entrypoint] ВНИМАНИЕ: update завершился с ошибкой; сервис стартует без свежих данных" >&2
+        echo "[entrypoint] первый импорт не удался — контейнер завершается (restart-политика повторит)" >&2
+        exit 1
     fi
     UPDATE_PID=""
     if [ "$stopping" = "true" ]; then
         exit 0
     fi
+elif is_true "${UPDATE_ON_START:-false}"; then
+    # Данные уже есть: обновление идёт фоном, serve стартует сразу и продолжает отдавать
+    # прежние данные (advisory lock не даст пересечься с cron-обновлением).
+    echo "[entrypoint] обновление при старте запущено фоном (сервис продолжает работать)"
+    "${update_env[@]}" "${update_cmd[@]}" &
+    UPDATE_PID=$!
 fi
 
 echo "[entrypoint] запуск slup-geo serve"
 if [ -n "${DATABASE_URL:-}" ]; then
-    gosu "$APP_USER" slup-geo serve &
+    env -u POSTGRES_PASSWORD -u PGPASSWORD gosu "$APP_USER" slup-geo serve &
 else
-    env PGUSER=geo_reader PGPASSWORD="$reader_password" gosu "$APP_USER" slup-geo serve &
+    env -u POSTGRES_PASSWORD PGUSER=geo_reader PGPASSWORD="$reader_password" gosu "$APP_USER" slup-geo serve &
 fi
 SERVE_PID=$!
 

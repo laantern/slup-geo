@@ -5,8 +5,9 @@
 -- name_norm: lower, ё→е, пунктуация → пробелы (единая нормализация с запросом).
 -- Варианты с одинаковой нормой схлопываются, чтобы каждая сущность+норма была уникальной
 -- (уникальный индекс нужен для REFRESH MATERIALIZED VIEW CONCURRENTLY).
+-- {{sfx}} — как и в 01-views.sql: «» для канонических матвью, «_next» для staging.
 
-CREATE MATERIALIZED VIEW geo.names AS
+CREATE MATERIALIZED VIEW geo.names{{sfx}} AS
 WITH base AS (
   SELECT 'AREA'::text AS entity_kind,
          z.osm_type || z.osm_id AS entity_id,
@@ -15,7 +16,7 @@ WITH base AS (
            regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яa-z0-9]+', ' ', 'g'),
            '([0-9])([а-яa-z])', '\1 \2', 'g'
          ) AS name_norm
-  FROM geo.zones z
+  FROM geo.zones{{sfx}} z
   CROSS JOIN LATERAL (VALUES (z.label), (z.name_ru), (z.name_be)) AS v(name)
   WHERE v.name IS NOT NULL AND btrim(v.name::text) <> ''
   UNION ALL
@@ -26,7 +27,7 @@ WITH base AS (
            regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яa-z0-9]+', ' ', 'g'),
            '([0-9])([а-яa-z])', '\1 \2', 'g'
          )
-  FROM geo.streets s
+  FROM geo.streets{{sfx}} s
   CROSS JOIN LATERAL (VALUES (s.label), (s.name_ru), (s.name_be)) AS v(name)
   WHERE v.name IS NOT NULL AND btrim(v.name::text) <> ''
 ),
@@ -54,9 +55,9 @@ SELECT entity_kind, entity_id, name, name_norm
 FROM dedup
 WHERE btrim(name_norm) <> '';
 
-CREATE INDEX names_norm_trgm_idx ON geo.names USING gin (name_norm gin_trgm_ops);
-CREATE INDEX names_norm_prefix_idx ON geo.names (name_norm text_pattern_ops);
-CREATE UNIQUE INDEX names_entity_uidx ON geo.names (entity_kind, entity_id, name_norm);
+CREATE INDEX names{{sfx}}_norm_trgm_idx ON geo.names{{sfx}} USING gin (name_norm gin_trgm_ops);
+CREATE INDEX names{{sfx}}_norm_prefix_idx ON geo.names{{sfx}} (name_norm text_pattern_ops);
+CREATE UNIQUE INDEX names{{sfx}}_entity_uidx ON geo.names{{sfx}} (entity_kind, entity_id, name_norm);
 
 -- Метаданные схемы: версия проверяется сервисом при старте (см. internal/schema).
 CREATE TABLE IF NOT EXISTS geo.meta (

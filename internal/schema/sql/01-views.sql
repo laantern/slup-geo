@@ -1,16 +1,20 @@
 -- Слой представлений поверх данных osm2pgsql.
--- Применяется после импорта: планета-таблицы пересоздаются, поэтому матвью пересобираются.
+-- Один и тот же скрипт применяется в двух вариантах (подстановка {{pfx}}/{{sfx}} в internal/schema):
+--   * канонический ({{pfx}}=«», {{sfx}}=«») — по таблицам planet_osm_* и матвью geo.zones и т.д.;
+--   * staging ({{pfx}}=«_next», {{sfx}}=«_next») — по staging-таблицам planet_osm_next_* и
+--     матвью geo.zones_next и т.д. Staging-матвью собираются ДО замены рабочих таблиц, вне
+--     транзакции: читатели API не блокируются. Финальная замена — короткая метаданная транзакция.
 -- Уникальные индексы нужны для REFRESH MATERIALIZED VIEW CONCURRENTLY (обновление без
 -- блокировки чтения при будущем append-импорте) и заодно защищают от дублей.
 
 CREATE SCHEMA IF NOT EXISTS geo;
 
-DROP MATERIALIZED VIEW IF EXISTS geo.names;
-DROP MATERIALIZED VIEW IF EXISTS geo.addresses;
-DROP MATERIALIZED VIEW IF EXISTS geo.streets;
-DROP MATERIALIZED VIEW IF EXISTS geo.zones;
+DROP MATERIALIZED VIEW IF EXISTS geo.names{{sfx}};
+DROP MATERIALIZED VIEW IF EXISTS geo.addresses{{sfx}};
+DROP MATERIALIZED VIEW IF EXISTS geo.streets{{sfx}};
+DROP MATERIALIZED VIEW IF EXISTS geo.zones{{sfx}};
 
-CREATE MATERIALIZED VIEW geo.zones AS
+CREATE MATERIALIZED VIEW geo.zones{{sfx}} AS
 WITH parts AS (
   SELECT
     'W'::text AS osm_type,
@@ -40,7 +44,7 @@ WITH parts AS (
       ELSE 'AREA'
     END AS kind,
     way AS geom
-  FROM planet_osm_polygon
+  FROM planet_osm{{pfx}}_polygon
   WHERE (boundary = 'administrative'
      OR tags ? 'place'
      OR landuse IN ('residential', 'industrial', 'commercial', 'retail', 'construction', 'cemetery', 'allotments'))
@@ -81,11 +85,11 @@ SELECT
   END AS geom_display
 FROM merged;
 
-CREATE INDEX zones_geom_idx ON geo.zones USING gist (geom);
-CREATE INDEX zones_level_idx ON geo.zones (level);
-CREATE UNIQUE INDEX zones_osm_uidx ON geo.zones (osm_type, osm_id);
+CREATE INDEX zones{{sfx}}_geom_idx ON geo.zones{{sfx}} USING gist (geom);
+CREATE INDEX zones{{sfx}}_level_idx ON geo.zones{{sfx}} (level);
+CREATE UNIQUE INDEX zones{{sfx}}_osm_uidx ON geo.zones{{sfx}} (osm_type, osm_id);
 
-CREATE MATERIALIZED VIEW geo.streets AS
+CREATE MATERIALIZED VIEW geo.streets{{sfx}} AS
 SELECT
   'W'::text AS osm_type,
   osm_id,
@@ -93,23 +97,23 @@ SELECT
   min(tags->'name:ru') AS name_ru,
   min(COALESCE(tags->'name:ru', name)) AS label,
   ST_Union(way) AS geom
-FROM planet_osm_line
+FROM planet_osm{{pfx}}_line
 WHERE highway IS NOT NULL AND name IS NOT NULL
 GROUP BY osm_id;
 
-CREATE INDEX streets_geom_idx ON geo.streets USING gist (geom);
-CREATE INDEX streets_name_be_idx ON geo.streets (name_be);
-CREATE INDEX streets_osm_idx ON geo.streets (osm_id);
-CREATE UNIQUE INDEX streets_osm_uidx ON geo.streets (osm_type, osm_id);
+CREATE INDEX streets{{sfx}}_geom_idx ON geo.streets{{sfx}} USING gist (geom);
+CREATE INDEX streets{{sfx}}_name_be_idx ON geo.streets{{sfx}} (name_be);
+CREATE INDEX streets{{sfx}}_osm_idx ON geo.streets{{sfx}} (osm_id);
+CREATE UNIQUE INDEX streets{{sfx}}_osm_uidx ON geo.streets{{sfx}} (osm_type, osm_id);
 
-CREATE MATERIALIZED VIEW geo.addresses AS
+CREATE MATERIALIZED VIEW geo.addresses{{sfx}} AS
 SELECT 'W'::text AS osm_type, osm_id,
        min(tags->'addr:housenumber') AS housenumber,
        min(tags->'addr:street') AS street_be,
        min(tags->'addr:city') AS city,
        ST_PointOnSurface(ST_Union(way)) AS point,
        ST_Union(way) AS geom
-FROM planet_osm_polygon
+FROM planet_osm{{pfx}}_polygon
 WHERE tags ? 'addr:housenumber'
 GROUP BY osm_id
 UNION ALL
@@ -119,10 +123,10 @@ SELECT 'N'::text, osm_id,
        tags->'addr:city',
        way,
        way
-FROM planet_osm_point
+FROM planet_osm{{pfx}}_point
 WHERE tags ? 'addr:housenumber';
 
 -- geom — контур дома: расстояние до него = 0 для точки внутри/на доме (нужно для порога «точный адрес»)
-CREATE INDEX addresses_geom_idx ON geo.addresses USING gist (geom);
-CREATE INDEX addresses_street_idx ON geo.addresses (street_be);
-CREATE UNIQUE INDEX addresses_osm_uidx ON geo.addresses (osm_type, osm_id);
+CREATE INDEX addresses{{sfx}}_geom_idx ON geo.addresses{{sfx}} USING gist (geom);
+CREATE INDEX addresses{{sfx}}_street_idx ON geo.addresses{{sfx}} (street_be);
+CREATE UNIQUE INDEX addresses{{sfx}}_osm_uidx ON geo.addresses{{sfx}} (osm_type, osm_id);
