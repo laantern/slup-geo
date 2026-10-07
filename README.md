@@ -34,8 +34,8 @@ services:
       - no-new-privileges:true
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL]
-    # ports:
-    #   - "8080:8080"   # только если обращаетесь с хоста; в docker-сети — http://geo:8080
+    ports:
+      - "8080:8080"   # для локальных проверок и /example; в docker-сети — http://geo:8080
     environment:
       # ОБЯЗАТЕЛЬНОЕ, если нет локального PBF
       PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf
@@ -152,15 +152,17 @@ const map = new maplibregl.Map({ container: 'map', style: '/tiles/style.json' })
 2. `tilemaker` собирает тайлы из того же PBF во временный файл;
 3. `osm2pgsql` импортирует PBF в **staging-таблицы** `planet_osm_next_*` — рабочие данные и API
    не трогаются;
-4. одной транзакцией: старые таблицы заменяются на staging, пересобираются представления
-   `geo.zones/streets/addresses/names` (склейка мультиполигонов, поисковый индекс имён),
-   индексы GIST/`pg_trgm`, `ANALYZE`. При любой ошибке транзакция откатывается — работающие
+4. представления `geo.zones/streets/addresses/names` собираются заранее под временными именами
+   `geo.*_next` — вне транзакции, поэтому читатели API не блокируются;
+5. короткая транзакция заменяет рабочие таблицы и матвью (только `DROP`/`RENAME` метаданных):
+   блокировка читателей — доли секунды, при любой ошибке транзакция откатывается и работающие
    данные остаются на месте;
-5. публикация тайлов (`basemap-<время>.pmtiles` + `tiles.json`) и маркеров состояния
+6. публикация тайлов (`basemap-<время>.pmtiles` + `tiles.json`) и маркеров состояния
    (`state.json`, `status.json`) — атомарно (temp + fsync + rename).
 
 Сбой обновления (битый PBF, кончился диск, OOM) не оставляет сервис без данных: старые таблицы
-и тайлы продолжают работать, ошибка видна в `/status` и в логах.
+и тайлы продолжают работать, ошибка видна в `/status` и в логах. Во время импорта API отвечает
+на прежних данных; финальное переключение — короткая пауза (обычно меньше секунды).
 
 **Ориентиры** для Беларуси (PBF 334 МБ): БД ~4.2 ГБ, тайлы ~380 МБ, сборка тайлов ~40 с на 16
 ядрах. На время обновления нужно **~2× места под БД** (старые и staging-таблицы сосуществуют).
@@ -201,6 +203,9 @@ docker compose exec -u slup geo slup-geo update
 | `GET /health` | `ok` (данные готовы) / `starting` / `no_data` / `unavailable` + `importedAt`, `lastUpdate` |
 | `GET /status` | версия, `schemaReady`, данные (`state.json`), последнее обновление (`status.json`) |
 
+Обе ручки — внутренние: в `/status` видны пути данных и текст последней ошибки обновления
+(учётные данные в URL маскируются). Наружу их публиковать не нужно.
+
 Логи — stdout контейнера: `serve`/`update` пишут этапы обновления; HTTP-запросы — access-лог
 (метод, путь, статус, длительность; query не логируется — там бывают адреса). `LOG_LEVEL=debug`
 добавляет healthcheck/тайлы.
@@ -222,7 +227,7 @@ docker compose exec -u slup geo slup-geo update
 | `SHUTDOWN_TIMEOUT_SECONDS` | `15` | Сколько ждать аккуратной остановки HTTP-сервера (1–3600) |
 | `DATA_DIR` | `/data` | Корень данных: БД, PBF, тайлы, состояние |
 | `HTTP_ADDR` | `:8080` | Адрес API |
-| `DATABASE_URL` / `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | встроенная БД | Подключение к PostgreSQL (при `DATABASE_URL` апплаенс не управляет ролями) |
+| `DATABASE_URL` / `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` | встроенная БД | Подключение к PostgreSQL. При `DATABASE_URL` апплаенс не управляет ролями — создайте расширения `postgis`, `hstore`, `pg_trgm` заранее |
 | `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD` | `geo_db`, `geo_user`, генерируется | Параметры встроенной БД (пароль хранится в volume) |
 | `TZ` | UTC | Таймзона контейнера (влияет на cron) |
 | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |

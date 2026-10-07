@@ -12,10 +12,10 @@
 go build ./... && go vet ./... && go test ./...          # обычные проверки
 docker build -t aliakseikarpenka/slup-geo:dev .          # образ для e2e
 
-# интеграционные тесты SQL/PGStore на живом PostGIS:
+# интеграционные тесты SQL/PGStore и swap на живом PostGIS (пакеты — последовательно, -p 1):
 docker run -d --name pgtest -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=geo_test -p 5433:5432 postgis/postgis:16-3.4
 TEST_DATABASE_URL='postgres://postgres:postgres@localhost:5433/geo_test?sslmode=disable' \
-  go test -tags=integration ./internal/geo/...
+  go test -p 1 -tags=integration ./internal/geo/... ./internal/update/...
 
 # полный e2e на реальном PBF (Windows PowerShell):
 powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
@@ -25,13 +25,16 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
 
 1. **`/v1/*` — внутренний API без аутентификации.** Не публиковать порт наружу; наружу — только
    `/tiles/*`. Rate-limit — забота потребителя (nginx/сеть).
-2. **Обновление неразрушающее.** Импорт — только в staging-таблицы `planet_osm_next_*`; замена
-   рабочих таблиц и пересборка представлений — одной транзакцией (`swapPlanetTables`). Нельзя
-   добавлять `DROP` рабочих таблиц до успешного импорта. Сбой обновления обязан оставлять
-   прежние данные работающими.
+2. **Обновление неразрушающее.** Импорт — только в staging-таблицы `planet_osm_next_*`; матвью
+   собираются заранее под временными именами `geo.*_next` **вне транзакции**
+   (`buildViewsStaging`), финальная замена — короткая метаданная транзакция только с `DROP`/`RENAME`
+   (`swapPlanetTables`). Нельзя добавлять в финальную транзакцию пересборку данных и нельзя
+   трогать рабочие таблицы до успешного импорта. Сбой любого шага обязан оставлять прежние
+   данные и матвью работающими.
 3. **Роли БД.** `update` работает ролью `geo_owner` (без суперправ), `serve` — `geo_reader`
-   (только SELECT). `geo_user` — администратор образа (entrypoint), приложением не используется.
-   PostgreSQL слушает только `127.0.0.1`.
+   (только SELECT). `geo_user` — администратор образа (entrypoint), приложению его пароль
+   не передаётся (`env -u POSTGRES_PASSWORD`, файл `db_password` — root-only). PostgreSQL
+   слушает только `127.0.0.1`, локальные подключения требуют пароль (scram).
 4. **Секреты.** Пароли ролей — в `/data/state/db_password*` (0600). Не логировать `PBF_URL`
    с учётными данными (использовать `redactURL`); не коммитить `.env`, PBF, pmtiles.
 5. **Данные PBF.** Скачивание только `https` (http — локальные зеркала), с проверкой заголовка
