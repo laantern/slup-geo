@@ -86,6 +86,12 @@ func TestSwapIntegration(t *testing.T) {
 	assertCount(t, pool, `SELECT count(*) FROM pg_indexes
 		WHERE schemaname = 'geo' AND indexname LIKE '%\_next\_%' ESCAPE '\'`, 0,
 		"индексов со staging-именами быть не должно")
+	assertCount(t, pool, `SELECT count(*) FROM pg_indexes
+		WHERE schemaname = 'public' AND indexname LIKE '%\_next\_%' ESCAPE '\'`, 0,
+		"индексы public-таблиц тоже должны получить канонические имена")
+	assertCount(t, pool, `SELECT count(*) FROM pg_indexes
+		WHERE schemaname = 'public' AND indexname = 'planet_osm_point_way_idx'`, 1,
+		"канонический индекс planet_osm_point_way_idx должен существовать")
 
 	var label string
 	if err := pool.QueryRow(ctx, `SELECT label FROM geo.zones LIMIT 1`).Scan(&label); err != nil {

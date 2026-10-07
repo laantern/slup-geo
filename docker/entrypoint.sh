@@ -43,6 +43,9 @@ else
 fi
 printf '%s' "$db_password" > "$db_password_file"
 chmod 600 "$db_password_file"
+# chown -R по state выполняется раньше и мог вернуть файл slup'у на повторных стартах —
+# админ-пароль обязан оставаться root-only (см. SECURITY.md).
+chown 0:0 "$db_password_file" 2>/dev/null || true
 export POSTGRES_PASSWORD="$db_password"
 export PGPASSWORD="$db_password"
 
@@ -167,7 +170,7 @@ SQL
     # иначе reload логирует «parameter cannot be changed without restarting».
     conf="$PGDATA/postgresql.conf"
     if [ -f "$conf" ]; then
-        sed -i -E "s|^[[:space:]]*listen_addresses[[:space:]]*=.*$|listen_addresses = '127.0.0.1'|" "$conf"
+        sed -i -E "s|^[[:space:]]*#?[[:space:]]*listen_addresses[[:space:]]*=.*$|listen_addresses = '127.0.0.1'|" "$conf"
     fi
     hba="$PGDATA/pg_hba.conf"
     if [ -f "$hba" ]; then
@@ -182,8 +185,9 @@ SQL
 fi
 
 # Команда и окружение обновления: geo_owner + его пароль, без админ-пароля в окружении.
+# В режиме внешней БД убираем и PGPASSWORD (иначе пароль встроенной БД унаследуется детьми).
 if [ -n "${DATABASE_URL:-}" ]; then
-    update_env=(env -u POSTGRES_PASSWORD)
+    update_env=(env -u POSTGRES_PASSWORD -u PGPASSWORD)
 else
     update_env=(env -u POSTGRES_PASSWORD PGUSER=geo_owner PGPASSWORD="$owner_password")
 fi
@@ -198,10 +202,14 @@ fi
 
 if [ "$schema_ready" != "true" ]; then
     echo "[entrypoint] первый импорт данных (PBF → PostGIS → представления → тайлы)"
-    if ! "${update_env[@]}" "${update_cmd[@]}"; then
+    # Фоном, чтобы SIGTERM во время импорта доходил до update (trap знает UPDATE_PID).
+    "${update_env[@]}" "${update_cmd[@]}" &
+    UPDATE_PID=$!
+    if ! wait "$UPDATE_PID"; then
         echo "[entrypoint] первый импорт не удался — контейнер завершается (restart-политика повторит)" >&2
         exit 1
     fi
+    UPDATE_PID=""
     if [ "$stopping" = "true" ]; then
         exit 0
     fi
@@ -215,7 +223,7 @@ fi
 
 echo "[entrypoint] запуск slup-geo serve"
 if [ -n "${DATABASE_URL:-}" ]; then
-    env -u POSTGRES_PASSWORD gosu "$APP_USER" slup-geo serve &
+    env -u POSTGRES_PASSWORD -u PGPASSWORD gosu "$APP_USER" slup-geo serve &
 else
     env -u POSTGRES_PASSWORD PGUSER=geo_reader PGPASSWORD="$reader_password" gosu "$APP_USER" slup-geo serve &
 fi

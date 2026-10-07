@@ -35,7 +35,7 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID, KILL]
     ports:
-      - "8080:8080"   # для локальных проверок и /example; в docker-сети — http://geo:8080
+      - "8080:8080"   # только для локальных проверок и /example; в проде не публикуйте — в docker-сети http://geo:8080
     environment:
       # ОБЯЗАТЕЛЬНОЕ, если нет локального PBF
       PBF_URL: https://download.geofabrik.de/europe/belarus-latest.osm.pbf

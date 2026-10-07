@@ -33,6 +33,10 @@ CREATE TABLE planet_osm_point (
     way    geometry(Geometry, 4326)
 );
 
+-- osm2pgsql создаёт индексы на выходных таблицах — воспроизводим и проверяем их переименование.
+CREATE INDEX planet_osm_point_way_idx ON planet_osm_point USING gist (way);
+CREATE INDEX planet_osm_polygon_way_idx ON planet_osm_polygon USING gist (way);
+
 -- Область с русским именем (проверяет name:ru в matview zones).
 INSERT INTO planet_osm_polygon (osm_id, name, boundary, landuse, tags, way) VALUES
 (1, 'Гомельская область', 'administrative', NULL,

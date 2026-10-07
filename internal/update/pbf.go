@@ -111,7 +111,7 @@ func (u *Updater) downloadPBF(ctx context.Context, cached os.FileInfo) (bool, er
 			return false, ctx.Err()
 		}
 		if attempt > 1 {
-			u.log.Warn("повтор загрузки PBF", "попытка", attempt, "ошибка", lastErr)
+			u.log.Warn("повтор загрузки PBF", "попытка", attempt, "ошибка", sanitizeError(lastErr))
 			select {
 			case <-ctx.Done():
 				return false, ctx.Err()
@@ -250,17 +250,20 @@ func validatePBF(path string) error {
 	return nil
 }
 
-// redactURL убирает из URL учётные данные перед логированием и записью в состояние.
+// redactURL убирает из URL учётные данные и query (там бывают токены) перед логированием
+// и записью в состояние.
 func redactURL(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User == nil {
+	if err != nil {
 		return redactText(raw)
 	}
-	parsed.User = nil
-	return parsed.String()
+	if parsed.User != nil {
+		parsed.User = nil
+	}
+	return redactText(parsed.String())
 }
 
 // urlUserinfo / urlQuery — маскирование чувствительных частей URL в текстах ошибок:

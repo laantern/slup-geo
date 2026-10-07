@@ -38,21 +38,25 @@ func main() {
 	cmd := command()
 	applyPasswordFallback(cmd)
 
-	cfg, err := config.Load()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "ошибка конфигурации:", err)
-		os.Exit(2)
-	}
-
-	log := newLogger()
-
 	switch cmd {
 	case "serve":
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ошибка конфигурации:", err)
+			os.Exit(2)
+		}
+		log := newLogger()
 		if err := serve(cfg, log); err != nil {
 			log.Error("serve завершился с ошибкой", "error", err)
 			os.Exit(1)
 		}
 	case "update":
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ошибка конфигурации:", err)
+			os.Exit(2)
+		}
+		log := newLogger()
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 		if err := update.New(cfg, log).Run(ctx); err != nil {
@@ -60,6 +64,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "version":
+		// version не требует конфигурации: не должен падать без PGPASSWORD/DATABASE_URL.
 		fmt.Printf("slup-geo %s (commit %s, %s)\n", version, commit, date)
 	default:
 		fmt.Fprintln(os.Stderr, "использование: slup-geo <serve|update|version>")

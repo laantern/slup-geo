@@ -195,7 +195,12 @@ func (u *Updater) lock(ctx context.Context, pool *pgxpool.Pool) (func(), error) 
 		unlockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if _, err := conn.Exec(unlockCtx, "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
-			u.log.Warn("не удалось снять advisory lock", "error", err)
+			// Соединение с удержанным локом нельзя возвращать в пул — закрываем его.
+			u.log.Warn("не удалось снять advisory lock — соединение закрывается", "error", err)
+			if raw := conn.Hijack(); raw != nil {
+				_ = raw.Close(context.WithoutCancel(ctx))
+			}
+			return
 		}
 		conn.Release()
 	}, nil
@@ -241,7 +246,11 @@ func ClearStaleStatus(ctx context.Context, pool *pgxpool.Pool, statusPath string
 		return // обновление действительно выполняется
 	}
 	if _, err := conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", advisoryLockKey); err != nil {
-		log.Warn("не удалось снять advisory lock", "error", err)
+		// Соединение с удержанным локом нельзя возвращать в пул — закрываем его.
+		log.Warn("не удалось снять advisory lock — соединение закрывается", "error", err)
+		if raw := conn.Hijack(); raw != nil {
+			_ = raw.Close(context.WithoutCancel(ctx))
+		}
 		return
 	}
 

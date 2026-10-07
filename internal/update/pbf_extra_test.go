@@ -5,7 +5,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
+
+func TestTruncateRunes(t *testing.T) {
+	if got := truncateRunes("короткая", 10); got != "короткая" {
+		t.Fatalf("короткая строка изменена: %q", got)
+	}
+	got := truncateRunes(strings.Repeat("я", 10), 5)
+	if !utf8.ValidString(got) || len([]rune(got)) != 6 || []rune(got)[5] != '…' {
+		t.Fatalf("truncateRunes = %q", got)
+	}
+}
 
 func TestRedactText(t *testing.T) {
 	cases := []struct{ name, in, want string }{
@@ -37,6 +48,17 @@ func TestRedactURLMalformed(t *testing.T) {
 	}
 	if strings.Contains(got, "token=abcd") {
 		t.Fatalf("query-токен не замаскирован: %q", got)
+	}
+}
+
+func TestRedactURLHidesQuery(t *testing.T) {
+	// Валидный URL: userinfo убирается, query (там бывают токены) маскируется.
+	got := redactURL("https://user:secret@example.com/file?token=abcd")
+	if strings.Contains(got, "secret") || strings.Contains(got, "user@") {
+		t.Fatalf("userinfo не замаскирован: %q", got)
+	}
+	if strings.Contains(got, "token=abcd") {
+		t.Fatalf("query не замаскирован: %q", got)
 	}
 }
 

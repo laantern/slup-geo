@@ -107,7 +107,16 @@ func (h *TilesHandler) serveCurrentTiles(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
-	if info, err := os.Stat(paths[0]); err != nil || !info.Mode().IsRegular() {
+
+	// Пропускаем каталоги/битые записи с подходящим именем — отдаём первый настоящий файл.
+	var current string
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+			current = path
+			break
+		}
+	}
+	if current == "" {
 		http.NotFound(w, r)
 		return
 	}
@@ -115,7 +124,7 @@ func (h *TilesHandler) serveCurrentTiles(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/vnd.pmtiles")
 	// Короткий кэш: алиас стабилен, но после обновления должен быстро переключиться на новый файл.
 	w.Header().Set("Cache-Control", "public, max-age=60")
-	http.ServeFile(w, r, paths[0])
+	http.ServeFile(w, r, current)
 }
 
 // serveVersionedTiles отдаёт конкретный версионный файл (immutable).
