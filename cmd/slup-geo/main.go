@@ -68,41 +68,38 @@ func main() {
 }
 
 // applyPasswordFallback позволяет запускать slup-geo через docker exec без явных кредов:
-// entrypoint сохраняет пароли ролей в volume (state/db_password_owner и т.п.).
+// entrypoint сохраняет пароли ролей в volume (state/db_password_owner, db_password_reader).
+// Пароль администратора (geo_user) приложению не выдаётся — см. SECURITY.md.
 func applyPasswordFallback(cmd string) {
 	if os.Getenv("DATABASE_URL") != "" || strings.TrimSpace(os.Getenv("PGPASSWORD")) != "" {
 		return
 	}
 
-	type creds struct{ user, file string }
-	var candidates []creds
+	var user, file string
 	switch cmd {
 	case "update":
-		candidates = []creds{{"geo_owner", "db_password_owner"}, {"geo_user", "db_password"}}
+		user, file = "geo_owner", "db_password_owner"
 	case "serve":
-		candidates = []creds{{"geo_reader", "db_password_reader"}, {"geo_user", "db_password"}}
+		user, file = "geo_reader", "db_password_reader"
 	default:
-		candidates = []creds{{"geo_user", "db_password"}}
+		return
 	}
 
 	dataDir := os.Getenv("DATA_DIR")
 	if dataDir == "" {
 		dataDir = "/data"
 	}
-	for _, candidate := range candidates {
-		data, err := os.ReadFile(filepath.Join(dataDir, "state", candidate.file))
-		if err != nil {
-			continue
-		}
-		password := strings.TrimSpace(string(data))
-		if password == "" {
-			continue
-		}
-		_ = os.Setenv("PGPASSWORD", password)
-		if current := os.Getenv("PGUSER"); current == "" || current == "geo_user" {
-			_ = os.Setenv("PGUSER", candidate.user)
-		}
+	data, err := os.ReadFile(filepath.Join(dataDir, "state", file))
+	if err != nil {
 		return
+	}
+	password := strings.TrimSpace(string(data))
+	if password == "" {
+		return
+	}
+	_ = os.Setenv("PGPASSWORD", password)
+	if current := os.Getenv("PGUSER"); current == "" || current == "geo_user" {
+		_ = os.Setenv("PGUSER", user)
 	}
 }
 
@@ -139,9 +136,12 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	// Расширения нужны для запросов (pg_trgm) — идемпотентно обеспечиваем их на старте.
 	if extensions, err := schema.Extensions(); err == nil {
 		if err := db.ExecScripts(ctx, cfg.DatabaseDSN, extensions); err != nil {
-			log.Warn("не удалось применить расширения БД", "error", err)
+			log.Error("не удалось применить расширения БД (postgis, hstore, pg_trgm) — при внешней БД создайте их заранее", "error", err)
 		}
 	}
+
+	// После жёсткого останова мог остаться статус running без живого процесса обновления.
+	update.ClearStaleStatus(ctx, pool, cfg.StatusPath(), log)
 
 	store := geo.NewPGStore(pool)
 	initialized, err := store.SchemaReady(ctx)

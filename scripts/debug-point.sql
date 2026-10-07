@@ -1,5 +1,6 @@
--- Отладка локации точки внутри контейнера (psql):
---   docker exec -i <контейнер> psql -U geo_user -d geo_db -v lon=30.96 -v lat=52.39 < scripts/debug-point.sql
+-- Отладка локации точки внутри контейнера (psql; локальные подключения требуют пароль):
+--   docker exec -i <контейнер> sh -c 'PGPASSWORD=$(cat /data/state/db_password) \
+--     psql -h 127.0.0.1 -U geo_user -d geo_db -v lon=30.96 -v lat=52.39' < scripts/debug-point.sql
 -- Показывает дом (если в пределах 5 м от контура) и содержащие зоны по возрастанию площади —
 -- те же данные, что собирает GET /v1/point (имя дома — в том же формате).
 \timing on
