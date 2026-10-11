@@ -3,15 +3,19 @@ name: build
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
+    # Документация (*.md, docs/) не пересобирает образ, кроме THIRD_PARTY_LICENSES.md:
+    # он, как и LICENSE, входит в образ. Порядок шаблонов важен (последний совпавший решает).
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "THIRD_PARTY_LICENSES.md"
+      - "!docs/**"
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "THIRD_PARTY_LICENSES.md"
+      - "!docs/**"
 
 permissions:
   contents: read
@@ -34,11 +38,13 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   # Проверка SQL-схемы и PGStore на живом PostGIS: расширения → фикстура → представления → use case'ы.
+  # Образ закреплён по digest. В образе апплаенса PostGIS 3.6 (PGDG), а postgis/postgis для PG16
+  # публикуется максимум с 3.5 — берём ближайший; полный путь на PostGIS 3.6 проверяет job e2e.
   integration:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: postgis/postgis:16-3.5@sha256:94146ac37bc61e2322f88016056c5920729cb8c64c8542ed590af8fc2abdac07
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: geo_test
@@ -61,11 +67,32 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/geo_test?sslmode=disable
 
+  # Сквозная проверка образа на маленьком PBF (Монако): первый импорт, тайлы и атрибуция,
+  # обновление по расписанию правами update, лицензии в образе.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          load: true
+          tags: slup-geo:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - run: ./scripts/ci-e2e.sh slup-geo:ci
+        env:
+          E2E_LOG: ${{ runner.temp }}/slup-geo-e2e.log
+      - if: failure()
+        run: cat "${{ runner.temp }}/slup-geo-e2e.log" || true
+
   # Автотег на push в master: patch-бамп от последнего тега v*. Повторный запуск
   # на том же коммите переиспользует уже созданный тег (идемпотентность).
   tag:
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    needs: [test, integration]
+    needs: [test, integration, e2e]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -107,7 +134,7 @@ jobs:
   # Секреты репозитория: DOCKERHUB_USERNAME, DOCKERHUB_TOKEN (Read & Write).
   publish:
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    needs: [test, integration, tag]
+    needs: [test, integration, e2e, tag]
     runs-on: ubuntu-latest
     timeout-minutes: 150
     # Публикации идут по очереди: параллельные push'и в master не должны гоняться за :latest.

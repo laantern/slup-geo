@@ -4,12 +4,14 @@ package schema
 import (
 	"embed"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
 // Version — версия схемы данных (geo.meta.schema_version). Меняется при несовместимых
 // изменениях SQL-представлений: serve сравнивает её со своей и предупреждает о рассинхроне.
-const Version = 1
+// v2: в нормализации имён (geo.names) сохраняются белорусские і/ў и украинские ї/є/ґ.
+const Version = 2
 
 //go:embed sql/*.sql
 var files embed.FS
@@ -20,9 +22,28 @@ func Extensions() (string, error) {
 }
 
 // Views — представления для канонических таблиц planet_osm_* (тесты, инструменты,
-// внешние сценарии). В штатном обновлении не используются: см. ViewsStaging.
+// внешние сценарии) вместе с записью версии схемы. В штатном обновлении не используются:
+// см. ViewsStaging и Meta.
 func Views() ([]string, error) {
-	return render("", "")
+	views, err := render("", "")
+	if err != nil {
+		return nil, err
+	}
+	meta, err := Meta()
+	if err != nil {
+		return nil, err
+	}
+	return append(views, meta), nil
+}
+
+// Meta — запись текущей версии схемы в geo.meta. В штатном обновлении выполняется после
+// успешной замены таблиц: версия в БД всегда описывает рабочие данные.
+func Meta() (string, error) {
+	script, err := read("sql/03-meta.sql")
+	if err != nil {
+		return "", err
+	}
+	return strings.ReplaceAll(script, "{{version}}", strconv.Itoa(Version)), nil
 }
 
 // ViewsStaging — те же представления, но по staging-таблицам planet_osm_next_*

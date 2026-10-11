@@ -4,7 +4,8 @@
 #   2) готовит роли БД: geo_owner — владелец данных (update), geo_reader — только SELECT (serve),
 #      geo_user — администратор образа (приложению его пароль не выдаётся);
 #   3) первый импорт выполняет синхронно; UPDATE_ON_START при готовой схеме — фоном, не останавливая serve;
-#   4) запускает HTTP-сервис; периодичность обновлений задаёт UPDATE_SCHEDULE (внутри serve).
+#   4) запускает HTTP-сервис (geo_reader) и, при UPDATE_SCHEDULE, планировщик обновлений
+#      отдельным процессом с правами update (geo_owner).
 set -Eeo pipefail
 umask 077
 
@@ -81,12 +82,16 @@ PG_PID=$!
 
 SERVE_PID=""
 UPDATE_PID=""
+SCHEDULE_PID=""
 stopping="false"
 shutdown() {
     stopping="true"
     echo "[entrypoint] остановка контейнера..."
     if [ -n "$UPDATE_PID" ]; then
         kill -TERM "$UPDATE_PID" 2>/dev/null || true
+    fi
+    if [ -n "$SCHEDULE_PID" ]; then
+        kill -TERM "$SCHEDULE_PID" 2>/dev/null || true
     fi
     if [ -n "$SERVE_PID" ]; then
         kill -TERM "$SERVE_PID" 2>/dev/null || true
@@ -192,6 +197,7 @@ else
     update_env=(env -u POSTGRES_PASSWORD PGUSER=geo_owner PGPASSWORD="$owner_password")
 fi
 update_cmd=(gosu "$APP_USER" slup-geo update)
+schedule_cmd=(gosu "$APP_USER" slup-geo schedule)
 
 # Первый импорт: пустая БД (нет схемы geo).
 # Провал — завершаемся с кодом 1: restart-политика повторит попытку, а не оставит 503 no_data навсегда.
@@ -221,6 +227,15 @@ elif is_true "${UPDATE_ON_START:-false}"; then
     UPDATE_PID=$!
 fi
 
+# Планировщик — отдельный процесс с окружением update (geo_owner): serve только читает БД.
+# Его падение не останавливает API (ошибки — в логе); пересечение с UPDATE_ON_START
+# исключает advisory lock.
+if [ -n "${UPDATE_SCHEDULE:-}" ]; then
+    echo "[entrypoint] запуск планировщика обновлений (UPDATE_SCHEDULE=$UPDATE_SCHEDULE)"
+    "${update_env[@]}" "${schedule_cmd[@]}" &
+    SCHEDULE_PID=$!
+fi
+
 echo "[entrypoint] запуск slup-geo serve"
 if [ -n "${DATABASE_URL:-}" ]; then
     env -u POSTGRES_PASSWORD -u PGPASSWORD gosu "$APP_USER" slup-geo serve &
@@ -235,6 +250,12 @@ else
     exit_code=$?
 fi
 echo "[entrypoint] процесс завершился (код $exit_code) — останавливаем контейнер"
+if [ -n "$SCHEDULE_PID" ]; then
+    kill -TERM "$SCHEDULE_PID" 2>/dev/null || true
+fi
+if [ -n "$UPDATE_PID" ]; then
+    kill -TERM "$UPDATE_PID" 2>/dev/null || true
+fi
 kill -TERM "$SERVE_PID" 2>/dev/null || true
 kill -TERM "$PG_PID" 2>/dev/null || true
 wait || true

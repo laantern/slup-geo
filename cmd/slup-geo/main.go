@@ -2,9 +2,10 @@
 //
 // Команды:
 //
-//	slup-geo serve   — HTTP-сервис (внутренний API + /tiles/*), при UPDATE_SCHEDULE — cron обновлений
-//	slup-geo update  — полный цикл обновления данных: PBF → импорт → схема → тайлы → маркер
-//	slup-geo version — версия сборки
+//	slup-geo serve    — HTTP-сервис (внутренний API + /tiles/*), только чтение БД
+//	slup-geo update   — полный цикл обновления данных: PBF → импорт → схема → тайлы → маркер
+//	slup-geo schedule — cron обновлений по UPDATE_SCHEDULE (отдельный процесс с правами update)
+//	slup-geo version  — версия сборки
 package main
 
 import (
@@ -63,11 +64,18 @@ func main() {
 			log.Error("update завершился с ошибкой", "error", err)
 			os.Exit(1)
 		}
+	case "schedule":
+		cfg, err := config.Load()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "ошибка конфигурации:", err)
+			os.Exit(2)
+		}
+		schedule(cfg, newLogger())
 	case "version":
 		// version не требует конфигурации: не должен падать без PGPASSWORD/DATABASE_URL.
 		fmt.Printf("slup-geo %s (commit %s, %s)\n", version, commit, date)
 	default:
-		fmt.Fprintln(os.Stderr, "использование: slup-geo <serve|update|version>")
+		fmt.Fprintln(os.Stderr, "использование: slup-geo <serve|update|schedule|version>")
 		os.Exit(2)
 	}
 }
@@ -82,7 +90,7 @@ func applyPasswordFallback(cmd string) {
 
 	var user, file string
 	switch cmd {
-	case "update":
+	case "update", "schedule":
 		user, file = "geo_owner", "db_password_owner"
 	case "serve":
 		user, file = "geo_reader", "db_password_reader"
@@ -188,8 +196,6 @@ func serve(cfg config.Config, log *slog.Logger) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	scheduler := update.New(cfg, log).StartSchedule(ctx)
-
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("HTTP-сервис запущен", "addr", cfg.HTTPAddr)
@@ -210,8 +216,23 @@ func serve(cfg config.Config, log *slog.Logger) error {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("остановка сервера: %w", err)
 	}
-	if scheduler != nil {
-		<-scheduler.Stop().Done()
-	}
 	return nil
+}
+
+// schedule запускает обновления по cron отдельным процессом. Обновлению нужны права
+// владельца данных (geo_owner), а serve работает ролью geo_reader (только SELECT) —
+// поэтому планировщик не живёт внутри serve. Пустое или невалидное расписание не считается
+// ошибкой процесса: пишем в лог и выходим, API продолжает работать.
+func schedule(cfg config.Config, log *slog.Logger) {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	scheduler := update.New(cfg, log).StartSchedule(ctx)
+	if scheduler == nil {
+		log.Info("расписание обновлений не активно — планировщик завершается")
+		return
+	}
+	<-ctx.Done()
+	log.Info("остановка планировщика обновлений")
+	<-scheduler.Stop().Done()
 }

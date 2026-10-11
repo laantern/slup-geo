@@ -194,7 +194,8 @@ func (h *Handlers) point(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, geo.ErrInvalidCoordinates):
 		writeProblem(w, http.StatusBadRequest, codeValidation)
 	case err != nil:
-		h.Log.Error("локация точки", "error", err, "lat", lat, "lon", lon)
+		// Координаты не логируем, как и query в access-логе: это местоположение пользователя.
+		h.Log.Error("локация точки", "error", err)
 		writeProblem(w, http.StatusInternalServerError, codeInternal)
 	default:
 		writeJSON(w, http.StatusOK, toPointResponse(location), h.Log)

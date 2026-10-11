@@ -102,6 +102,16 @@ func TestPGStoreIntegration(t *testing.T) {
 		t.Fatalf("геометрия W1 = %s, ожидался Polygon", zone.Geometry)
 	}
 
+	// Белорусское имя: запрос без типового слова находится точным совпадением (і/ў не теряются,
+	// «вуліца» снимается так же, как «улица»).
+	streets, err := store.Streets(ctx, Canon("Міцкевіча"), 5)
+	if err != nil {
+		t.Fatalf("streets: %v", err)
+	}
+	if len(streets) == 0 || streets[0].Label != "вуліца Міцкевіча" || streets[0].MatchRank != 3 {
+		t.Fatalf("поиск «Міцкевіча» = %+v, ожидалось точное совпадение с «вуліца Міцкевіча»", streets)
+	}
+
 	// Версия схемы записана представлениями.
 	version, err := store.SchemaVersion(ctx)
 	if err != nil {

@@ -21,7 +21,11 @@ type tilesManifest struct {
 const (
 	tilesFilePrefix = "basemap-"
 	tilesFileSuffix = ".pmtiles"
-	osmAttribution  = "© OpenStreetMap contributors"
+	// tilesAttribution — обязательная атрибуция карты: схема OpenMapTiles (CC-BY 4.0) и данные OSM (ODbL).
+	tilesAttribution = "© OpenMapTiles · © OpenStreetMap contributors"
+	// keepPreviousTiles — сколько предыдущих версий хранить после публикации: открытые карты
+	// и CDN, закешировавшие версионный URL (immutable), не получают 404 сразу после обновления.
+	keepPreviousTiles = 1
 )
 
 // builtTiles — собранный, но ещё не опубликованный файл тайлов.
@@ -68,7 +72,8 @@ func (u *Updater) buildTiles(ctx context.Context, pbfPath string) (*builtTiles, 
 
 // publishTiles публикует собранный файл (если есть) и обновляет манифест.
 // Порядок важен: сначала rename и манифест, только потом удаление старых версий —
-// иначе манифест может сослаться на уже удалённый файл.
+// иначе манифест может сослаться на уже удалённый файл. Предыдущая версия (keepPreviousTiles)
+// остаётся на диске до следующего обновления.
 func (u *Updater) publishTiles(built *builtTiles) ([]TileFile, error) {
 	var current *TileFile
 
@@ -98,7 +103,7 @@ func (u *Updater) publishTiles(built *builtTiles) ([]TileFile, error) {
 	}
 	manifest := tilesManifest{
 		Files:       files,
-		Attribution: osmAttribution,
+		Attribution: tilesAttribution,
 		GeneratedAt: time.Now().UTC(),
 	}
 	if err := writeJSONAtomic(filepath.Join(u.cfg.TilesDir(), "tiles.json"), manifest, 0o644); err != nil {
@@ -109,8 +114,15 @@ func (u *Updater) publishTiles(built *builtTiles) ([]TileFile, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Имена версий содержат время сборки — лексикографический порядок совпадает с хронологическим.
+	sort.Sort(sort.Reverse(sort.StringSlice(existing)))
+	kept := 0
 	for _, path := range existing {
 		if current != nil && filepath.Base(path) == current.Name {
+			continue
+		}
+		if current != nil && filepath.Base(path) < current.Name && kept < keepPreviousTiles {
+			kept++
 			continue
 		}
 		if err := os.Remove(path); err != nil {

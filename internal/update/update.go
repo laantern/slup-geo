@@ -136,6 +136,14 @@ func (u *Updater) Run(ctx context.Context) (err error) {
 	if err := u.swapPlanetTables(ctx); err != nil {
 		return err
 	}
+	// Версия схемы — только после успешной замены: она описывает рабочие данные.
+	meta, err := schema.Meta()
+	if err != nil {
+		return err
+	}
+	if err := db.ExecScripts(ctx, u.cfg.DatabaseDSN, meta); err != nil {
+		return fmt.Errorf("запись версии схемы: %w", err)
+	}
 	if _, err := pool.Exec(ctx, "ANALYZE geo.zones, geo.streets, geo.addresses, geo.names"); err != nil {
 		return fmt.Errorf("analyze матвью: %w", err)
 	}

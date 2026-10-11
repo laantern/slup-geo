@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +16,8 @@ import (
 const (
 	tilesFilePrefix = "basemap-"
 	tilesFileSuffix = ".pmtiles"
+	// tilesAttribution — атрибуция по умолчанию (пока update не записал tiles.json).
+	tilesAttribution = "© OpenMapTiles · © OpenStreetMap contributors"
 )
 
 // tileNamePattern — whitelist имён файлов тайлов: простые имена, без путей.
@@ -85,7 +88,7 @@ func (h *TilesHandler) serveManifest(w http.ResponseWriter, r *http.Request) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
 		h.Log.Warn("tiles.json не найден, отдаём пустой манифест", "error", err)
-		payload = []byte(`{"files":[],"attribution":"© OpenStreetMap contributors"}`)
+		payload, _ = json.Marshal(map[string]any{"files": []any{}, "attribution": tilesAttribution})
 	} else if !json.Valid(payload) {
 		h.Log.Error("tiles.json повреждён — манифест не отдаём", "файл", path)
 		http.Error(w, "tiles manifest is corrupted", http.StatusInternalServerError)
@@ -109,10 +112,13 @@ func (h *TilesHandler) serveCurrentTiles(w http.ResponseWriter, r *http.Request)
 	sort.Sort(sort.Reverse(sort.StringSlice(paths)))
 
 	// Пропускаем каталоги/битые записи с подходящим именем — отдаём первый настоящий файл.
-	var current string
+	var (
+		current string
+		info    os.FileInfo
+	)
 	for _, path := range paths {
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			current = path
+		if fi, err := os.Stat(path); err == nil && fi.Mode().IsRegular() {
+			current, info = path, fi
 			break
 		}
 	}
@@ -122,6 +128,9 @@ func (h *TilesHandler) serveCurrentTiles(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.pmtiles")
+	// ETag версии: клиент pmtiles сравнивает его между range-запросами и при смене файла
+	// после обновления перечитывает заголовок, а не читает новый архив по старому каталогу.
+	w.Header().Set("ETag", tilesETag(info))
 	// Короткий кэш: алиас стабилен, но после обновления должен быстро переключиться на новый файл.
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	http.ServeFile(w, r, current)
@@ -135,12 +144,14 @@ func (h *TilesHandler) serveVersionedTiles(w http.ResponseWriter, r *http.Reques
 	}
 
 	path := filepath.Join(h.Dir, name)
-	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
 		http.NotFound(w, r)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/vnd.pmtiles")
+	w.Header().Set("ETag", tilesETag(info))
 	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	http.ServeFile(w, r, path)
 }
@@ -183,6 +194,12 @@ func (h *TilesHandler) serveWebFile(w http.ResponseWriter, r *http.Request, name
 	}
 	w.Header().Set("Cache-Control", cacheControl)
 	http.ServeFile(w, r, path)
+}
+
+// tilesETag — сильный ETag файла тайлов: имя версии уникально для сборки, размер — страховка
+// от ручной подмены файла под тем же именем. http.ServeFile учитывает его в If-Range/If-None-Match.
+func tilesETag(info os.FileInfo) string {
+	return fmt.Sprintf(`"%s-%d"`, strings.TrimSuffix(info.Name(), tilesFileSuffix), info.Size())
 }
 
 func isWebFile(name string) bool {

@@ -50,7 +50,10 @@ INSERT INTO planet_osm_polygon (osm_id, name, boundary, landuse, tags, way) VALU
 -- Улица Бородина.
 INSERT INTO planet_osm_line (osm_id, name, highway, tags, way) VALUES
 (10, 'улица Бородина', 'residential', '"name:ru"=>"улица Бородина"'::hstore,
- ST_GeomFromText('LINESTRING(30.9400 52.3900, 30.9600 52.4000)', 4326));
+ ST_GeomFromText('LINESTRING(30.9400 52.3900, 30.9600 52.4000)', 4326)),
+-- Улица только с белорусским именем (проверяет і/ў в нормализации и снятие «вуліца»).
+(11, 'вуліца Міцкевіча', 'residential', ''::hstore,
+ ST_GeomFromText('LINESTRING(30.9700 52.4100, 30.9800 52.4200)', 4326));
 
 -- Адрес-нода (проверяет Point-геометрию в /v1/areas).
 INSERT INTO planet_osm_point (osm_id, tags, way) VALUES
