@@ -33,7 +33,7 @@ RUN make -j"$(nproc)" \
 
 # Апплаенс: PostgreSQL + PostGIS + приложение + импорт OSM + сборка тайлов.
 # Внутреннее устройство (БД, креды, утилиты) наружу не выставлено — только ENV.
-FROM postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
+FROM postgres:18-bookworm@sha256:afc7e2d441324c0388fa80c3d24f733b4194a4eb7f47dd8ee2b08eb1a24a647c
 
 # osm2pgsql — импорт OSM в PostGIS (поиск); runtime-библиотеки для tilemaker.
 # apt-пакеты намеренно не пиннятся по версиям: так образ получает security-обновления
