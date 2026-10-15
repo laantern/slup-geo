@@ -65,7 +65,6 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
 
 - `go build ./...`, `go vet ./...`, `go test ./...`, `govulncheck ./...`.
 - Изменения SQL/схемы — интеграционный тест (см. команды выше).
-- Изменения образа/update/расписания — `scripts/ci-e2e.sh <образ>` (выполняется и в CI).
 - Изменения нормализации поиска — синхронно `internal/geo/canon.go` и `02-names.sql`
   (сверяет `TestCanonMatchesSQL`), с повышением `internal/schema.Version`.
 - Изменения тайлов/стиля/`/example` — e2e и проверка страницы в браузере (Playwright):

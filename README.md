@@ -311,8 +311,6 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 
 - `scripts/e2e.ps1` — полный e2e на реальном PBF (импорт, эталонные кейсы, тайлы, персистентность).
 - `scripts/smoke.sh` — быстрая проверка запущенного сервиса.
-- `scripts/ci-e2e.sh <образ>` — сквозная проверка образа на PBF Монако (импорт, тайлы,
-  обновление по расписанию, лицензии в образе); запускается в CI.
 - `scripts/debug-point.sql` — отладка локации точки прямо в psql.
 - `deploy/compose.example.yml` — пример compose с hardening.
 
@@ -324,7 +322,7 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 ## CI/CD
 
 - Pull request и push в `master`: `go build` / `go vet` / `go test` / `govulncheck`; SQL-схема
-  проверяется на живом PostGIS; образ собирается и проходит e2e (`scripts/ci-e2e.sh`).
+  проверяется на живом PostGIS.
 - Push в `master`: автотег (patch-бамп от последнего `v*`) и публикация образа в Docker Hub
   (`linux/amd64`, `linux/arm64`) с SBOM и provenance: `aliakseikarpenka/slup-geo:<версия>` и `:latest`.
 - Зависимости и базовые образы обновляет Dependabot.
