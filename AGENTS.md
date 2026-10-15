@@ -45,8 +45,8 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
    `licenses/tilemaker-third-party.txt` и `tiles/web/vendor/LICENSE-*.txt` — новая вшитая
    библиотека требует обновления этих файлов.
 7. **Supply chain.** Базовые образы Dockerfile — по digest, Actions — по commit SHA,
-   зависимости Go обновляет Dependabot. Новые зависимости — только с совместимой лицензией
-   и записью в THIRD_PARTY_LICENSES.md.
+   зависимости Go — по `go.mod`/`go.sum`; обновление пинов — вручную. Новые зависимости — только
+   с совместимой лицензией и записью в THIRD_PARTY_LICENSES.md.
 8. **Документация синхронна коду.** При изменении ENV/ручек/поведения обновлять README,
    openapi.yaml и CHANGELOG.md. Версия схемы данных — `internal/schema.Version`.
 
