@@ -325,7 +325,7 @@ docker build -t aliakseikarpenka/slup-geo:dev .
   проверяется на живом PostGIS.
 - Push в `master`: автотег (patch-бамп от последнего `v*`) и публикация образа в Docker Hub
   (`linux/amd64`, `linux/arm64`) с SBOM и provenance: `aliakseikarpenka/slup-geo:<версия>` и `:latest`.
-- Зависимости и базовые образы обновляет Dependabot.
+- Зависимости, базовые образы и Actions обновляются вручную.
 
 ## Лицензия
 

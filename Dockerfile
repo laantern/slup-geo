@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Сборка приложения. Базовые образы закреплены по digest (обновляет Dependabot).
+# Сборка приложения. Базовые образы закреплены по digest (обновлять вручную).
 FROM golang:1.27-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS build
 WORKDIR /src
 COPY go.mod go.sum ./

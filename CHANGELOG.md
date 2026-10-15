@@ -44,6 +44,8 @@
   entrypoint образа запускайте `slup-geo schedule` отдельным процессом.
 - CI: интеграционные тесты — на `postgis/postgis:16-3.5`, закреплённом по digest (3.6 для PG16
   не публикуется). Изменение `THIRD_PARTY_LICENSES.md` и `LICENSE` теперь пересобирает образ.
+- Dependabot отключён: обновления зависимостей (Go-модули, базовые образы по digest, Actions
+  по SHA) выполняются вручную; конфиг `.github/dependabot.yml` удалён.
 
 ## [0.1.4] — 2026-10-07
 
