@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # Сборка приложения. Базовые образы закреплены по digest (обновляет Dependabot).
-FROM golang:1.27-bookworm@sha256:a4f46dc39c6b0359a3e1ed86ef14d01b374cc808649679dd5fca2290e6d54202 AS build
+FROM golang:1.27-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -12,6 +12,22 @@ ARG DATE=unknown
 RUN CGO_ENABLED=0 go build -trimpath \
     -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -o /out/slup-geo ./cmd/slup-geo
+# Лицензии всего, что вкомпилировано в бинарник (MIT/BSD требуют уведомлений при бинарной
+# поставке): стандартная библиотека Go + каждый модуль из графа сборки. Модуль без файла
+# лицензии валит сборку — новая зависимость не уедет в образ без уведомления.
+RUN set -eu; \
+    mkdir -p /out/licenses/go; \
+    cp "$(go env GOROOT)/LICENSE" /out/licenses/go/golang-stdlib-LICENSE; \
+    if [ -f "$(go env GOROOT)/PATENTS" ]; then cp "$(go env GOROOT)/PATENTS" /out/licenses/go/golang-stdlib-PATENTS; fi; \
+    go list -deps -f '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}} {{.Dir}}{{end}}{{end}}' ./cmd/slup-geo \
+      | sort -u | while read -r mod dir; do \
+        mkdir -p "/out/licenses/go/$mod"; \
+        found=0; \
+        for f in "$dir"/LICENSE* "$dir"/LICENCE* "$dir"/COPYING* "$dir"/NOTICE* "$dir"/PATENTS*; do \
+          if [ -f "$f" ]; then cp "$f" "/out/licenses/go/$mod/"; found=1; fi; \
+        done; \
+        if [ "$found" -ne 1 ]; then echo "нет файла лицензии у модуля $mod" >&2; exit 1; fi; \
+      done
 
 # tilemaker v3.2.0 — генератор векторных тайлов из OSM PBF.
 # Версия и sha256 архива закреплены; v3 умеет писать .pmtiles напрямую (без промежуточного MBTiles).
@@ -42,7 +58,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       postgresql-16-postgis-3 osm2pgsql ca-certificates curl tzdata \
       liblua5.3-0 libshp2 libsqlite3-0 \
-      libboost-filesystem1.74.0 libboost-program-options1.74.0 libboost-iostreams1.74.0 libboost-system1.74.0 \
+      libboost-filesystem1.74.0 libboost-program-options1.74.0 \
  && rm -rf /var/lib/apt/lists/*
 
 # Непривилегированный пользователь для serve/update: утилиты не работают от root.
@@ -56,6 +72,16 @@ COPY tiles/web/ /usr/local/share/slup-geo/
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
+# Лицензии и уведомления: собственный код (MIT), сводка сторонних компонентов, лицензии
+# Go-модулей и библиотек, вкомпилированных в tilemaker, а также точные версии пакетов
+# Debian/PGDG (по ним находятся исходники GPL-компонентов — см. THIRD_PARTY_LICENSES.md).
+COPY LICENSE THIRD_PARTY_LICENSES.md /usr/share/doc/slup-geo/
+COPY licenses/tilemaker-third-party.txt /usr/share/doc/tilemaker/THIRD_PARTY_NOTICES.txt
+COPY tiles/tilemaker/LICENCE.txt /usr/share/doc/tilemaker/LICENCE.txt
+COPY --from=build /out/licenses/go/ /usr/share/doc/slup-geo/go-licenses/
+RUN dpkg-query -W -f '${Package}\t${Version}\t${source:Package}\t${source:Version}\n' \
+      > /usr/share/doc/slup-geo/debian-packages.tsv
+
 ENV DATA_DIR=/data \
     PGDATA=/data/pgdata \
     HTTP_ADDR=:8080 \
@@ -67,6 +93,9 @@ ENV DATA_DIR=/data \
     PGUSER=geo_user
 
 EXPOSE 8080
+# Базовый образ postgres объявляет EXPOSE 5432 и VOLUME /var/lib/postgresql/data — отменить их
+# в Dockerfile нельзя. PostgreSQL слушает только 127.0.0.1, данные — в /data/pgdata; анонимный
+# volume остаётся пустым (удаляется вместе с контейнером через docker rm -v).
 VOLUME ["/data"]
 
 # start-period с запасом: первый импорт большого региона может идти долго.

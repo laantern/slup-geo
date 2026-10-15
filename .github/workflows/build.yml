@@ -3,15 +3,19 @@ name: build
 on:
   push:
     branches: [master]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
+    # Документация (*.md, docs/) не пересобирает образ, кроме THIRD_PARTY_LICENSES.md:
+    # он, как и LICENSE, входит в образ. Порядок шаблонов важен (последний совпавший решает).
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "THIRD_PARTY_LICENSES.md"
+      - "!docs/**"
   pull_request:
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - "LICENSE"
+    paths:
+      - "**"
+      - "!**/*.md"
+      - "THIRD_PARTY_LICENSES.md"
+      - "!docs/**"
 
 permissions:
   contents: read
@@ -34,11 +38,13 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
   # Проверка SQL-схемы и PGStore на живом PostGIS: расширения → фикстура → представления → use case'ы.
+  # Образ закреплён по digest. В образе апплаенса PostGIS 3.6 (PGDG), а postgis/postgis для PG16
+  # публикуется максимум с 3.5 — берём ближайший.
   integration:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgis/postgis:16-3.4
+        image: postgis/postgis:16-3.5@sha256:94146ac37bc61e2322f88016056c5920729cb8c64c8542ed590af8fc2abdac07
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: geo_test

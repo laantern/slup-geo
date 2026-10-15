@@ -31,7 +31,7 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
    (`swapPlanetTables`). Нельзя добавлять в финальную транзакцию пересборку данных и нельзя
    трогать рабочие таблицы до успешного импорта. Сбой любого шага обязан оставлять прежние
    данные и матвью работающими.
-3. **Роли БД.** `update` работает ролью `geo_owner` (без суперправ), `serve` — `geo_reader`
+3. **Роли БД.** `update` и `schedule` работают ролью `geo_owner` (без суперправ), `serve` — `geo_reader`
    (только SELECT). `geo_user` — администратор образа (entrypoint), приложению его пароль
    не передаётся (`env -u POSTGRES_PASSWORD`, файл `db_password` — root-only). PostgreSQL
    слушает только `127.0.0.1`, локальные подключения требуют пароль (scram).
@@ -40,7 +40,10 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
 5. **Данные PBF.** Скачивание только `https` (http — локальные зеркала), с проверкой заголовка
    PBF до импорта и лимитом размера. `PBF_URL`/`PBF_PATH` — единственные входы данных.
 6. **Атрибуция.** Карта требует `© OpenMapTiles · © OpenStreetMap contributors` (в `/example`
-   и в стиле/метаданных тайлов). Лицензии зависимостей — в THIRD_PARTY_LICENSES.md.
+   и в стиле/метаданных тайлов, `tiles.json`). Лицензии зависимостей — в THIRD_PARTY_LICENSES.md;
+   в образ попадают `LICENSE`, сводка, лицензии Go-модулей (собираются в Dockerfile),
+   `licenses/tilemaker-third-party.txt` и `tiles/web/vendor/LICENSE-*.txt` — новая вшитая
+   библиотека требует обновления этих файлов.
 7. **Supply chain.** Базовые образы Dockerfile — по digest, Actions — по commit SHA,
    зависимости Go обновляет Dependabot. Новые зависимости — только с совместимой лицензией
    и записью в THIRD_PARTY_LICENSES.md.
@@ -49,18 +52,21 @@ powershell -File scripts/e2e.ps1 -PbfPath D:\osm\belarus-latest.osm.pbf
 
 ## Структура
 
-- `cmd/slup-geo` — CLI: `serve`, `update`, `version` (fallback паролей для `docker exec` — в main.go).
+- `cmd/slup-geo` — CLI: `serve`, `update`, `schedule`, `version` (fallback паролей для `docker exec` — в main.go).
 - `internal/api` — HTTP: ручки, тайлы, `/example`, middleware (заголовки, access-лог).
 - `internal/geo` — домен: модели, `pgstore.go` (SQL), сервисы point/suggest/areas.
 - `internal/update` — PBF (скачивание/валидация), osm2pgsql (staging), swap+views, tilemaker, статусы.
 - `internal/schema` — SQL-схема (embed): extensions, views, names, geo.meta.
 - `tiles/tilemaker` — профиль OpenMapTiles; `tiles/web` — стиль, глифы, вендорные библиотеки, пример.
+- `licenses/` — уведомления сторонних библиотек, вкомпилированных в tilemaker.
 - `docker/entrypoint.sh` — жизненный цикл: PostgreSQL, роли, update, serve, коды выхода.
 
 ## Проверки перед коммитом
 
 - `go build ./...`, `go vet ./...`, `go test ./...`, `govulncheck ./...`.
 - Изменения SQL/схемы — интеграционный тест (см. команды выше).
+- Изменения нормализации поиска — синхронно `internal/geo/canon.go` и `02-names.sql`
+  (сверяет `TestCanonMatchesSQL`), с повышением `internal/schema.Version`.
 - Изменения тайлов/стиля/`/example` — e2e и проверка страницы в браузере (Playwright):
   карта рендерится, поиск/точка/границы работают, консоль без ошибок, атрибуция на месте.
 - Изменения update/entrypoint — e2e с существующим и чистым volume (данные переживают рестарт,

@@ -7,7 +7,7 @@
 |---|---|---|
 | `style.json` | стиль под схему OpenMapTiles; ссылки абсолютные (`/tiles/...`) — работает за любым доменом при размещении в корне (для подпути поправьте пути); без POI-иконок (спрайт не входит) | BSD-3-Clause (код) + CC-BY 4.0 (дизайн), см. `LICENSE-osm-bright.md` |
 | `fonts/<fontstack>/<range>.pbf` | глифы Noto (Regular/Bold/Italic) для подписей | SIL OFL 1.1 (см. `fonts/LICENSE` и `fonts/NOTICE`) |
-| `vendor/` | вендорные библиотеки карты (без CDN): MapLibre GL JS 6.12.0 — ESM-модули `maplibre-gl.mjs` + `maplibre-gl-shared.mjs` + `maplibre-gl-worker.mjs`, `maplibre-gl.css`; pmtiles JS 4.5.0 (`pmtiles.js`) | MapLibre — BSD-3-Clause; pmtiles JS — BSD-3-Clause |
+| `vendor/` | вендорные библиотеки карты (без CDN): MapLibre GL JS 6.12.0 — ESM-модули `maplibre-gl.mjs` + `maplibre-gl-shared.mjs` + `maplibre-gl-worker.mjs`, `maplibre-gl.css`; pmtiles JS 4.5.0 (`pmtiles.js`) | MapLibre — BSD-3-Clause (`vendor/LICENSE-maplibre-gl.txt`); pmtiles JS — BSD-3-Clause (`vendor/LICENSE-pmtiles.txt`) |
 | `example/` | страница-пример `/example` (`index.html` + `app.js`): карта, поиск, точка, границы; библиотеки подключаются из `../tiles/vendor/` | см. `vendor/` |
 
 **Обязательная атрибуция.** Продукты, использующие карту на схеме OpenMapTiles, должны заметно

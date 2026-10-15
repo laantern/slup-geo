@@ -8,7 +8,7 @@ info:
 
     Версия — версия контракта API (semver): минорные и патч-версии не содержат
     ломающих изменений. Не связана с тегами образа (`vX.Y.Z` в Docker Hub).
-  version: "1.1.0"
+  version: "1.1.1"
 
 paths:
   /health:
@@ -58,8 +58,9 @@ paths:
     get:
       summary: "Поисковые подсказки (до 10): админ-зоны/улицы, дома улицы, зоны улицы"
       description: |
-        Запрос нормализуется (регистр, ё→е, пунктуация, «3я» = «3-я»). Минимальная длина —
-        по нормализованной строке (2), максимальная — 128 символов.
+        Запрос нормализуется (регистр, ё→е, пунктуация, «3я» = «3-я»); белорусские і/ў и
+        украинские ї/є/ґ сохраняются как буквы. Минимальная длина — по нормализованной
+        строке (2), максимальная — 128 символов.
       parameters:
         - name: q
           in: query
@@ -117,6 +118,9 @@ paths:
   /tiles/basemap.pmtiles:
     get:
       summary: Алиас актуального архива тайлов (max-age=60, ETag/Last-Modified)
+      description: |
+        ETag меняется вместе с версией архива: клиент pmtiles по нему замечает обновление
+        и перечитывает заголовок. Данные — ODbL, атрибуция `© OpenMapTiles · © OpenStreetMap contributors`.
       responses:
         "200":
           description: Актуальный файл тайлов
@@ -175,7 +179,8 @@ paths:
 
   /tiles/{file}:
     get:
-      summary: Версионный файл PMTiles (Range, immutable)
+      summary: Версионный файл PMTiles (Range, immutable, ETag)
+      description: Хранится текущая и одна предыдущая версия; более старые удаляются при обновлении.
       parameters:
         - name: file
           in: path
@@ -347,7 +352,7 @@ components:
         files:
           type: array
           items: { $ref: "#/components/schemas/TileFile" }
-        attribution: { type: string }
+        attribution: { type: string, example: "© OpenMapTiles · © OpenStreetMap contributors" }
         generatedAt: { type: string, format: date-time }
 
     Problem:

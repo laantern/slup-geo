@@ -2,7 +2,8 @@
 -- Для улиц дополнительно хранится вариант без типового слова («улица», «вуліца», «переулок», «завулак»…):
 -- тогда запрос «Бородина» точно матчит «улица Бородина», как люди и ищут.
 -- Дома не индексируем: они находятся через улицу (иначе миллионы строк и тяжёлый GIN).
--- name_norm: lower, ё→е, пунктуация → пробелы (единая нормализация с запросом).
+-- name_norm: lower, ё→е, пунктуация → пробелы (единая нормализация с запросом, см. geo.Canon);
+-- белорусские і/ў и украинские ї/є/ґ — буквы имени, а не пунктуация.
 -- Варианты с одинаковой нормой схлопываются, чтобы каждая сущность+норма была уникальной
 -- (уникальный индекс нужен для REFRESH MATERIALIZED VIEW CONCURRENTLY).
 -- {{sfx}} — как и в 01-views.sql: «» для канонических матвью, «_next» для staging.
@@ -13,8 +14,8 @@ WITH base AS (
          z.osm_type || z.osm_id AS entity_id,
          v.name::text AS name,
          regexp_replace(
-           regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яa-z0-9]+', ' ', 'g'),
-           '([0-9])([а-яa-z])', '\1 \2', 'g'
+           regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яіўїєґa-z0-9]+', ' ', 'g'),
+           '([0-9])([а-яіўїєґa-z])', '\1 \2', 'g'
          ) AS name_norm
   FROM geo.zones{{sfx}} z
   CROSS JOIN LATERAL (VALUES (z.label), (z.name_ru), (z.name_be)) AS v(name)
@@ -24,8 +25,8 @@ WITH base AS (
          s.osm_type || s.osm_id,
          v.name::text,
          regexp_replace(
-           regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яa-z0-9]+', ' ', 'g'),
-           '([0-9])([а-яa-z])', '\1 \2', 'g'
+           regexp_replace(replace(lower(v.name::text), 'ё', 'е'), '[^а-яіўїєґa-z0-9]+', ' ', 'g'),
+           '([0-9])([а-яіўїєґa-z])', '\1 \2', 'g'
          )
   FROM geo.streets{{sfx}} s
   CROSS JOIN LATERAL (VALUES (s.label), (s.name_ru), (s.name_be)) AS v(name)
@@ -60,9 +61,9 @@ CREATE INDEX names{{sfx}}_norm_prefix_idx ON geo.names{{sfx}} (name_norm text_pa
 CREATE UNIQUE INDEX names{{sfx}}_entity_uidx ON geo.names{{sfx}} (entity_kind, entity_id, name_norm);
 
 -- Метаданные схемы: версия проверяется сервисом при старте (см. internal/schema).
+-- Сама версия пишется отдельно (03-meta.sql): в штатном обновлении — только после успешной
+-- замены данных, чтобы сбойный swap не оставил «новую» версию над старыми данными.
 CREATE TABLE IF NOT EXISTS geo.meta (
   key   text PRIMARY KEY,
   value text NOT NULL
 );
-INSERT INTO geo.meta (key, value) VALUES ('schema_version', '1')
-ON CONFLICT (key) DO UPDATE SET value = excluded.value;

@@ -73,6 +73,9 @@ func TestParsePBFURLDoesNotLeak(t *testing.T) {
 }
 
 func TestIsWritable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root пишет в read-only файлы — проверка прав невозможна")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "file")
 	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {

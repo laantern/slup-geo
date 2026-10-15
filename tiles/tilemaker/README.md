@@ -4,7 +4,9 @@
 
 - `config-openmaptiles.json` — слои и зумы (схема OpenMapTiles);
 - `process-openmaptiles.lua` — преобразование тегов OSM в слои;
-- `LICENCE.txt` — лицензия tilemaker (FTWPL; вложенные библиотеки — BSD/MIT/Boost/Apache).
+- `LICENCE.txt` — лицензия tilemaker (FTWPL). Уведомления библиотек, вкомпилированных в бинарник
+  tilemaker (MIT/BSD/ISC/Apache-2.0/BSL-1.0), — в [`licenses/tilemaker-third-party.txt`](../../licenses/tilemaker-third-party.txt)
+  (в образе — `/usr/share/doc/tilemaker/THIRD_PARTY_NOTICES.txt`).
 
 **Изменения относительно апстрима:**
 - из конфига удалены слои, требующие внешних shapefile-датасетов (`ocean`, `urban_areas`,

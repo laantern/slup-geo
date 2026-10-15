@@ -156,16 +156,19 @@ const map = new maplibregl.Map({ container: 'map', style: '/tiles/style.json' })
    `geo.*_next` — вне транзакции, поэтому читатели API не блокируются;
 5. короткая транзакция заменяет рабочие таблицы и матвью (только `DROP`/`RENAME` метаданных):
    блокировка читателей — доли секунды, при любой ошибке транзакция откатывается и работающие
-   данные остаются на месте;
+   данные остаются на месте; версия схемы (`geo.meta`) записывается только после успешной замены;
 6. публикация тайлов (`basemap-<время>.pmtiles` + `tiles.json`) и маркеров состояния
-   (`state.json`, `status.json`) — атомарно (temp + fsync + rename).
+   (`state.json`, `status.json`) — атомарно (temp + fsync + rename). Предыдущая версия тайлов
+   хранится до следующего обновления: открытые карты и CDN не получают 404, а по `ETag`
+   клиент pmtiles замечает смену архива за алиасом `basemap.pmtiles`.
 
 Сбой обновления (битый PBF, кончился диск, OOM) не оставляет сервис без данных: старые таблицы
 и тайлы продолжают работать, ошибка видна в `/status` и в логах. Во время импорта API отвечает
 на прежних данных; финальное переключение — короткая пауза (обычно меньше секунды).
 
 **Ориентиры** для Беларуси (PBF 334 МБ): БД ~4.2 ГБ, тайлы ~380 МБ, сборка тайлов ~40 с на 16
-ядрах. На время обновления нужно **~2× места под БД** (старые и staging-таблицы сосуществуют).
+ядрах. На время обновления нужно **~2× места под БД** (старые и staging-таблицы сосуществуют)
+и до трёх файлов тайлов (предыдущий, текущий и собираемый).
 **Данные** — один volume `geo_data`: БД, PBF-кэш, тайлы, состояние; пересоздание контейнера данные
 не теряет.
 
@@ -176,8 +179,11 @@ docker compose exec -u slup geo slup-geo update
 ```
 
 Расписание — 5-полевой cron (`minute hour day month weekday`), время локальное для контейнера
-(по умолчанию UTC; задайте `TZ`, например `TZ=Europe/Minsk`). Невалидное расписание не роняет
-сервис — пишется ошибка, cron выключается.
+(по умолчанию UTC; задайте `TZ`, например `TZ=Europe/Minsk`). Обновления по расписанию выполняет
+отдельный процесс `slup-geo schedule` с правами `update` (роль `geo_owner`): `serve` работает
+ролью `geo_reader` и данные изменять не может. В контейнере его запускает entrypoint; при
+внешней БД без нашего entrypoint запустите `slup-geo schedule` рядом с `serve`. Невалидное
+расписание не роняет сервис — пишется ошибка, планировщик завершается.
 
 ### Зависимости и лицензии
 
@@ -186,15 +192,24 @@ docker compose exec -u slup geo slup-geo update
 | OpenStreetMap (PBF) | данные | [openstreetmap.org](https://www.openstreetmap.org/) | ODbL 1.0 (атрибуция обязательна) |
 | PostgreSQL + PostGIS | БД и пространственные функции | [postgresql.org](https://www.postgresql.org/), [postgis.net](https://postgis.net/) | PostgreSQL License / GPL-2+ |
 | osm2pgsql | импорт PBF в БД | [osm2pgsql.org](https://osm2pgsql.org/) | GPL-2+ |
-| tilemaker | сборка векторных тайлов | [github.com/systemed/tilemaker](https://github.com/systemed/tilemaker) | FTWPL (в Debian — GPL-2+) |
-| OpenMapTiles (схема и профиль) | имена слоёв, конфиг tilemaker | [openmaptiles.org/schema](https://openmaptiles.org/schema/) | BSD-3-Clause |
+| tilemaker | сборка векторных тайлов | [github.com/systemed/tilemaker](https://github.com/systemed/tilemaker) | FTWPL; вшитые библиотеки — MIT/BSD/ISC/Apache-2.0/BSL-1.0 |
+| OpenMapTiles (схема и профиль) | имена слоёв, конфиг tilemaker | [openmaptiles.org/schema](https://openmaptiles.org/schema/) | код BSD-3-Clause, схема/дизайн CC-BY 4.0 (атрибуция обязательна) |
 | PMTiles | формат архива тайлов | [github.com/protomaps/PMTiles](https://github.com/protomaps/PMTiles) | спецификация — CC0/public domain, реализации — BSD-3 |
 | OSM Bright | стиль карты | [github.com/openmaptiles/osm-bright-gl-style](https://github.com/openmaptiles/osm-bright-gl-style) | код BSD-3, дизайн CC-BY 4.0 |
 | Noto (глифы) | шрифты подписей | [notofonts.github.io](https://notofonts.github.io/) (глифы — [OpenFreeMap](https://openfreemap.org)) | SIL OFL 1.1 |
 | MapLibre GL JS 6 + pmtiles JS | отрисовка на фронте | [maplibre.org](https://maplibre.org/) | BSD-3-Clause |
 | pgx, robfig/cron (Go) | драйвер БД, cron | [github.com/jackc/pgx](https://github.com/jackc/pgx), [github.com/robfig/cron](https://github.com/robfig/cron) | MIT |
 
-Полный список с версиями и текстами — [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+Полный список с версиями и текстами — [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). В образе
+тексты лицензий лежат в `/usr/share/doc/slup-geo/` (собственный `LICENSE`, сводка, лицензии
+Go-модулей, точные версии пакетов Debian/PGDG), `/usr/share/doc/tilemaker/` и
+`/usr/share/doc/<пакет>/copyright`.
+
+**Данные и атрибуция.** Тайлы (`*.pmtiles`) и ответы `/v1/*` производны от OpenStreetMap и
+распространяются на условиях ODbL 1.0. Карта обязана показывать
+`© OpenMapTiles · © OpenStreetMap contributors`; если вы показываете пользователям адреса и зоны
+из `/v1/*` без карты (например, подсказки адреса), укажите `© OpenStreetMap contributors` рядом
+с ними или на доступной странице с источниками.
 
 ## Наблюдаемость
 
@@ -217,7 +232,7 @@ docker compose exec -u slup geo slup-geo update
 | `PBF_URL` | не задан | Откуда скачивать OSM PBF (только `https://`; `http` — для локальных зеркал). Пусто — использовать только локальный `PBF_PATH` |
 | `PBF_PATH` | `$DATA_DIR/osm/belarus-latest.osm.pbf` | Локальный файл PBF (кэш загрузки, офлайн-импорт) |
 | `UPDATE_ON_START` | `false` | Обновлять данные при каждом старте контейнера (`1/true/yes/on`) |
-| `UPDATE_SCHEDULE` | пусто (выключено) | 5-полевой cron обновлений, например `0 4 * * 1`; время локальное (`TZ`, по умолчанию UTC) |
+| `UPDATE_SCHEDULE` | пусто (выключено) | 5-полевой cron обновлений, например `0 4 * * 1`; время локальное (`TZ`, по умолчанию UTC). Выполняется процессом `slup-geo schedule` с правами `update` |
 | `TILES_ENABLED` | `true` | Собирать карту из PBF (tilemaker) |
 | `TILEMAKER_THREADS` | `0` (авто) | Потоков tilemaker при сборке тайлов (0–256) |
 | `TILEMAKER_CONFIG` / `TILEMAKER_PROCESS` | профиль OpenMapTiles из образа | Пути к конфигу слоёв и Lua-профилю |
@@ -259,6 +274,9 @@ location /tiles/ {
   предупреждение в логе, лечится `slup-geo update`.
 - Изменения по версиям — [CHANGELOG.md](CHANGELOG.md). В `v0.1.1` удалены неиспользуемые
   ENV (`TILES_URL`, `TILES_BBOX`, `TILES_MAXZOOM`) и корневой compose-файл.
+- Образ унаследовал от `postgres` объявления `EXPOSE 5432` и `VOLUME /var/lib/postgresql/data`.
+  PostgreSQL слушает только `127.0.0.1` (порт 5432 недоступен извне), данные — в `/data/pgdata`;
+  docker создаёт пустой анонимный volume, который удаляется вместе с контейнером (`docker rm -v`).
 
 ## FAQ
 
@@ -273,7 +291,8 @@ location /tiles/ {
   перезапуск).
 - **Есть ли ключи и лимиты?** Нет внешних сервисов — ключи не нужны; лимиты — ваша зона
   ответственности (прокси/сеть).
-- **Что с лицензиями?** Код — MIT; данные OSM — ODbL; обязательна атрибуция
+- **Что с лицензиями?** Код slup-geo — MIT; образ — агрегат с компонентами под GPL-2+ (PostGIS,
+  osm2pgsql) и другими лицензиями; данные OSM и тайлы — ODbL; обязательна атрибуция
   `© OpenMapTiles · © OpenStreetMap contributors` (см. [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)).
 
 ## Разработка
@@ -295,7 +314,7 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 - `scripts/debug-point.sql` — отладка локации точки прямо в psql.
 - `deploy/compose.example.yml` — пример compose с hardening.
 
-Структура: `cmd/slup-geo` (CLI `serve`/`update`/`version`), `internal/api` (HTTP, тайлы, `/example`),
+Структура: `cmd/slup-geo` (CLI `serve`/`update`/`schedule`/`version`), `internal/api` (HTTP, тайлы, `/example`),
 `internal/geo` (модели, SQL, логика поиска), `internal/update` (PBF, osm2pgsql, tilemaker),
 `internal/schema` (SQL-схема), `tiles/tilemaker` (профиль), `tiles/web` (стиль, шрифты, вендорные
 библиотеки, пример), `docker/` (entrypoint).
@@ -310,4 +329,6 @@ docker build -t aliakseikarpenka/slup-geo:dev .
 
 ## Лицензия
 
-[MIT](LICENSE) © Aleksei Karpenko. Атрибуция карты: `© OpenMapTiles · © OpenStreetMap contributors`.
+[MIT](LICENSE) © Aleksei Karpenko — код slup-geo. Сторонние компоненты образа — под своими
+лицензиями (см. [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)). Атрибуция карты:
+`© OpenMapTiles · © OpenStreetMap contributors`.
