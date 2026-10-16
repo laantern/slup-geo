@@ -291,6 +291,8 @@ func resolveExpansion(streets []StreetMatch, tokens []string) *streetExpansion {
 		}
 	}
 
+	tokens = expandGluedHouseMarkers(tokens)
+
 	numberIndex := -1
 	for i, token := range tokens {
 		if isNumberToken(token) {
@@ -301,9 +303,14 @@ func resolveExpansion(streets []StreetMatch, tokens []string) *streetExpansion {
 		number, usedIndexes := numberWithSuffix(tokens, numberIndex)
 		parts := make([]string, 0, len(tokens))
 		for i, token := range tokens {
-			if _, used := usedIndexes[i]; !used {
-				parts = append(parts, token)
+			if _, used := usedIndexes[i]; used {
+				continue
 			}
+			if _, marker := houseMarkers[token]; marker {
+				// Служебное слово перед номером («Бородина, д. 6А») — не часть названия улицы.
+				continue
+			}
+			parts = append(parts, token)
 		}
 		streetNorm := strings.Join(parts, " ")
 		if streetNorm != "" {
@@ -316,6 +323,25 @@ func resolveExpansion(streets []StreetMatch, tokens []string) *streetExpansion {
 	}
 
 	return &streetExpansion{street: streets[0]}
+}
+
+// houseMarkers — служебные слова перед номером дома: «Бородина, д. 6А» и «Бородина дом 6А»
+// должны находить дом так же, как «Бородина 6А».
+var houseMarkers = map[string]struct{}{"д": {}, "дом": {}}
+
+// expandGluedHouseMarkers разделяет маркер и номер, склеенные без пробела: канон «д6А»
+// даёт токен «д6», а разбору нужны отдельные «д» и «6».
+func expandGluedHouseMarkers(tokens []string) []string {
+	expanded := make([]string, 0, len(tokens)+1)
+	for _, token := range tokens {
+		rest, ok := strings.CutPrefix(token, "д")
+		if !ok || !isNumberToken(rest) {
+			expanded = append(expanded, token)
+			continue
+		}
+		expanded = append(expanded, "д", rest)
+	}
+	return expanded
 }
 
 func containsAllTokens(nameNorm string, tokens []string) bool {
