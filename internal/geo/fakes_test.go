@@ -12,16 +12,14 @@ type fakeStore struct {
 	zones    []ZoneRow
 	zonesErr error
 
-	streets        []StreetMatch
-	streetsMore    []StreetMatch
-	streetsErr     error
-	areas          []AreaMatch
-	areasErr       error
-	houses         []HouseMatch
-	housesByOSM    map[int64][]HouseMatch
-	housesErr      error
-	streetZones    []ZoneMatch
-	zonesStreetErr error
+	streets     []StreetMatch
+	streetsMore []StreetMatch
+	streetsErr  error
+	areas       []AreaMatch
+	areasErr    error
+	houses      []HouseMatch
+	housesByOSM map[int64][]HouseMatch
+	housesErr   error
 
 	lastHousenumber *string
 	houseCalls      int
@@ -76,13 +74,6 @@ func (f *fakeStore) StreetHouses(_ context.Context, osmID int64, housenumber *st
 		return f.housesByOSM[osmID], nil
 	}
 	return f.houses, nil
-}
-
-func (f *fakeStore) StreetZones(context.Context, int64, int) ([]ZoneMatch, error) {
-	if f.zonesStreetErr != nil {
-		return nil, f.zonesStreetErr
-	}
-	return f.streetZones, nil
 }
 
 func (f *fakeStore) FindArea(context.Context, string, int64, bool) (*AreaRow, error) {

@@ -17,7 +17,6 @@ const (
 	maxQueryLength    = 128
 	streetSearchLimit = 5
 	housesLimit       = 3
-	zonesLimit        = 5
 	// houseSearchStreetLimit — окно улиц для перебора при поиске номера дома:
 	// у одной улицы много way в разных городах, верхние позиции занимает самый крупный город.
 	houseSearchStreetLimit = 50
@@ -43,8 +42,8 @@ func NewSuggestService(store SearchStore) *SuggestService {
 	return &SuggestService{store: store}
 }
 
-// Suggest возвращает до 10 подсказок по сквозному ранжированию: зоны, совпавшие точнее
-// найденной улицы → дома улицы → городские админ-зоны → зоны улицы → оставшиеся зоны по имени.
+// Suggest возвращает до 10 подсказок — только совпадения по имени: зоны точнее найденной
+// улицы → дома улицы → городские админ-зоны → остальные зоны (точность → масштаб места).
 func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion, error) {
 	if utf8.RuneCountInString(raw) > maxQueryLength {
 		return nil, ErrInvalidQuery
@@ -89,14 +88,6 @@ func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion,
 		for areaIndex < len(areas) && len(items) < suggestResultLimit && cityAreaAfterHouses(areas[areaIndex], expansion) {
 			appendArea(&items, usedIDs, areas[areaIndex])
 			areaIndex++
-		}
-
-		if len(items) < suggestResultLimit {
-			zones, err := s.store.StreetZones(ctx, houseStreet.OSMID, zonesLimit)
-			if err != nil {
-				return nil, fmt.Errorf("поиск зон улицы: %w", err)
-			}
-			appendStreetZones(&items, usedIDs, houseStreet.CityLabel, zones)
 		}
 	}
 
@@ -200,29 +191,6 @@ func derefString(value *string) string {
 		return ""
 	}
 	return *value
-}
-
-func appendStreetZones(items *[]Suggestion, usedIDs map[string]struct{}, cityLabel *string, zones []ZoneMatch) {
-	for _, zone := range zones {
-		if len(*items) >= suggestResultLimit {
-			return
-		}
-		if _, used := usedIDs[zone.ID]; used {
-			continue
-		}
-		usedIDs[zone.ID] = struct{}{}
-
-		*items = append(*items, Suggestion{
-			ID:       zone.ID,
-			Name:     zone.Name,
-			Level:    zone.Level,
-			Kind:     zone.Kind,
-			AreaM2:   zone.AreaM2,
-			Subtitle: cityLabel,
-			Lat:      zone.Lat,
-			Lon:      zone.Lon,
-		})
-	}
 }
 
 func appendArea(items *[]Suggestion, usedIDs map[string]struct{}, area AreaMatch) {

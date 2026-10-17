@@ -225,40 +225,6 @@ func (s *PGStore) StreetHouses(ctx context.Context, streetOSMID int64, housenumb
 	return matches, rows.Err()
 }
 
-// StreetZones возвращает зоны, которые пересекает улица.
-func (s *PGStore) StreetZones(ctx context.Context, streetOSMID int64, limit int) ([]ZoneMatch, error) {
-	rows, err := s.pool.Query(ctx, findStreetZonesSQL, pgx.NamedArgs{"osmID": streetOSMID, "limit": limit})
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var matches []ZoneMatch
-	for rows.Next() {
-		var (
-			id       string
-			name     string
-			level    string
-			kind     string
-			areaM2   float64
-			lat, lon float64
-		)
-		if err := rows.Scan(&id, &name, &level, &kind, &areaM2, &lat, &lon); err != nil {
-			return nil, err
-		}
-		matches = append(matches, ZoneMatch{
-			ID:     id,
-			Name:   name,
-			Level:  ZoneLevelFromOSM(level),
-			Kind:   ZoneKindFromOSM(kind),
-			AreaM2: int64(math.Round(areaM2)),
-			Lat:    lat,
-			Lon:    lon,
-		})
-	}
-	return matches, rows.Err()
-}
-
 // FindArea ищет зону (geom_display для отрисовки) или дом (контур).
 func (s *PGStore) FindArea(ctx context.Context, osmType string, osmID int64, exact bool) (*AreaRow, error) {
 	row := s.pool.QueryRow(ctx, findAreaSQL, pgx.NamedArgs{"type": osmType, "osmID": osmID, "exact": exact})
@@ -422,16 +388,6 @@ LIMIT @limit`
 
 const housesFirstSQL = housesSelectSQL + `
 ORDER BY (a.osm_type = 'W') DESC, length(a.housenumber), a.housenumber
-LIMIT @limit`
-
-const findStreetZonesSQL = `
-WITH s AS (SELECT geom FROM geo.streets WHERE osm_id = @osmID LIMIT 1)
-SELECT z.osm_type || z.osm_id AS id, z.label AS name, z.level, z.kind,
-       round(z.area_m2) AS area_m2,
-       ST_Y(ST_PointOnSurface(z.geom)) AS lat, ST_X(ST_PointOnSurface(z.geom)) AS lon
-FROM geo.zones z, s
-WHERE ST_Intersects(z.geom, s.geom)
-ORDER BY z.area_m2
 LIMIT @limit`
 
 const findAreaSQL = `
