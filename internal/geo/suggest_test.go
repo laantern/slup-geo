@@ -92,6 +92,36 @@ func TestSuggestHouseNumberExtracted(t *testing.T) {
 	}
 }
 
+func TestSuggestHouseNumberExtractedWithMarker(t *testing.T) {
+	// Пользователь печатает адрес как на картах: «Бородина, д. 6А». Служебное слово «д»
+	// не должно попадать в остаток названия улицы, иначе номер дома не извлекается.
+	for _, query := range []string{
+		"Бородина, д. 6А",
+		"Бородина д. 6А",
+		"Бородина д 6А",
+		"Бородина д6А",
+		"Бородина дом 6А",
+	} {
+		t.Run(query, func(t *testing.T) {
+			store := &fakeStore{
+				streets: []StreetMatch{streetMatch(1, "бородина", "улица Бородина", 3)},
+				houses:  []HouseMatch{houseMatch("W100", "6А")},
+			}
+
+			items, err := NewSuggestService(store).Suggest(context.Background(), query)
+			if err != nil {
+				t.Fatalf("неожиданная ошибка: %v", err)
+			}
+			if store.lastHousenumber == nil || *store.lastHousenumber != "6а" {
+				t.Fatalf("номер дома = %v, ожидался «6а»", store.lastHousenumber)
+			}
+			if len(items) == 0 || items[0].Level != LevelHouse || items[0].Name != "улица Бородина, д. 6А" {
+				t.Fatalf("первым должен быть дом, получено %+v", items)
+			}
+		})
+	}
+}
+
 func TestSuggestNumberInsideStreetNameNotSplit(t *testing.T) {
 	store := &fakeStore{
 		streets: []StreetMatch{streetMatch(1, "3 я линейная", "3-я Линейная улица", 3)},
