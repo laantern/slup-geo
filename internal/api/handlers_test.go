@@ -54,10 +54,6 @@ func (f *fakeStore) StreetHouses(context.Context, int64, *string, int) ([]geo.Ho
 	return f.houses, f.searchErr
 }
 
-func (f *fakeStore) StreetZones(context.Context, int64, int) ([]geo.ZoneMatch, error) {
-	return nil, f.searchErr
-}
-
 func (f *fakeStore) FindArea(context.Context, string, int64, bool) (*geo.AreaRow, error) {
 	return f.areaRow, f.areaErr
 }

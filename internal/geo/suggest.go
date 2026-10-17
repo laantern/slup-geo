@@ -3,7 +3,6 @@ package geo
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -18,20 +17,19 @@ const (
 	maxQueryLength    = 128
 	streetSearchLimit = 5
 	housesLimit       = 3
-	zonesLimit        = 5
-	adminBonus        = 150
 	// houseSearchStreetLimit — окно улиц для перебора при поиске номера дома:
 	// у одной улицы много way в разных городах, верхние позиции занимает самый крупный город.
 	houseSearchStreetLimit = 50
 )
 
-var adminLevels = map[ZoneLevel]struct{}{
+// cityAdminLevels — админ-уровни городского масштаба: их подсказки держатся сразу за домами
+// найденной улицы, выше селений и микрорайонов («советск» → Советский район Гомеля/Минска).
+var cityAdminLevels = map[ZoneLevel]struct{}{
 	LevelCity:         {},
 	LevelRaion:        {},
 	LevelCityDistrict: {},
 	LevelOblast:       {},
 	LevelCountry:      {},
-	LevelSettlement:   {},
 }
 
 // SuggestService — поисковые подсказки по улицам, зонам и домам.
@@ -44,8 +42,8 @@ func NewSuggestService(store SearchStore) *SuggestService {
 	return &SuggestService{store: store}
 }
 
-// Suggest возвращает до 10 подсказок: админ-зоны/улицы по сквозному ранжированию,
-// затем дома найденной улицы → зоны улицы → оставшиеся зоны по имени.
+// Suggest возвращает до 10 подсказок — только совпадения по имени: зоны точнее найденной
+// улицы → дома улицы → городские админ-зоны → остальные зоны (точность → масштаб места).
 func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion, error) {
 	if utf8.RuneCountInString(raw) > maxQueryLength {
 		return nil, ErrInvalidQuery
@@ -69,15 +67,11 @@ func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion,
 
 	tokens := strings.Fields(nameNorm)
 	expansion := resolveExpansion(streets, tokens)
-	streetScore := math.MinInt32
-	if expansion != nil {
-		streetScore = expansion.rank()
-	}
 
-	// Сквозное ранжирование: зоны/районы, которые не слабее найденной улицы, идут первыми
+	// Сквозное ранжирование: зоны, совпавшие точнее найденной улицы, идут первыми
 	// («Гомель» — город, а не дома «Гомельского переулка»).
 	areaIndex := 0
-	for areaIndex < len(areas) && len(items) < suggestResultLimit && areaRank(areas[areaIndex]) >= streetScore {
+	for areaIndex < len(areas) && len(items) < suggestResultLimit && areaBeforeStreet(areas[areaIndex], expansion) {
 		appendArea(&items, usedIDs, areas[areaIndex])
 		areaIndex++
 	}
@@ -89,12 +83,11 @@ func (s *SuggestService) Suggest(ctx context.Context, raw string) ([]Suggestion,
 		}
 		appendHouses(&items, usedIDs, houseStreet.Label, houses)
 
-		if len(items) < suggestResultLimit {
-			zones, err := s.store.StreetZones(ctx, houseStreet.OSMID, zonesLimit)
-			if err != nil {
-				return nil, fmt.Errorf("поиск зон улицы: %w", err)
-			}
-			appendStreetZones(&items, usedIDs, houseStreet.CityLabel, zones)
+		// Городские админ-зоны держатся сразу за домами, выше селений и микрорайонов:
+		// «советск» — Советская улица, затем Советский район, затем остальные зоны.
+		for areaIndex < len(areas) && len(items) < suggestResultLimit && cityAreaAfterHouses(areas[areaIndex], expansion) {
+			appendArea(&items, usedIDs, areas[areaIndex])
+			areaIndex++
 		}
 	}
 
@@ -200,29 +193,6 @@ func derefString(value *string) string {
 	return *value
 }
 
-func appendStreetZones(items *[]Suggestion, usedIDs map[string]struct{}, cityLabel *string, zones []ZoneMatch) {
-	for _, zone := range zones {
-		if len(*items) >= suggestResultLimit {
-			return
-		}
-		if _, used := usedIDs[zone.ID]; used {
-			continue
-		}
-		usedIDs[zone.ID] = struct{}{}
-
-		*items = append(*items, Suggestion{
-			ID:       zone.ID,
-			Name:     zone.Name,
-			Level:    zone.Level,
-			Kind:     zone.Kind,
-			AreaM2:   zone.AreaM2,
-			Subtitle: cityLabel,
-			Lat:      zone.Lat,
-			Lon:      zone.Lon,
-		})
-	}
-}
-
 func appendArea(items *[]Suggestion, usedIDs map[string]struct{}, area AreaMatch) {
 	if _, used := usedIDs[area.ID]; used {
 		return
@@ -241,18 +211,26 @@ func appendArea(items *[]Suggestion, usedIDs map[string]struct{}, area AreaMatch
 	})
 }
 
-// areaRank — оценка совпадения зоны: ранг (точное/префикс/нечёткое) + похожесть;
-// админ-зоны получают бонус, чтобы «Гомель» и «Железнодорожный район» не проигрывали одноимённым улицам.
-func areaRank(area AreaMatch) int {
-	score := area.MatchRank*100 + int(area.Similarity*10)
-	if _, admin := adminLevels[area.Level]; admin {
-		score += adminBonus
+// areaBeforeStreet — зона совпала точнее улицы: ранг выше либо, при равном ранге, похожесть
+// выше. При извлечённом номере дома («14 Полесская») улица ранжируется точной и зоны её не обгоняют.
+func areaBeforeStreet(area AreaMatch, street *streetExpansion) bool {
+	if street == nil {
+		return true
 	}
-	return score
+	rank := street.rank()
+	if area.MatchRank != rank {
+		return area.MatchRank > rank
+	}
+	return area.Similarity > street.street.Similarity
 }
 
-func streetRank(street StreetMatch) int {
-	return street.MatchRank*100 + int(street.Similarity*10)
+// cityAreaAfterHouses — городская админ-зона (город, район, область) отстала от улицы
+// не более чем на ранг и идёт сразу за её домами: «советск» → Советский район выше селений.
+func cityAreaAfterHouses(area AreaMatch, street *streetExpansion) bool {
+	if _, city := cityAdminLevels[area.Level]; !city {
+		return false
+	}
+	return area.MatchRank >= street.rank()-1
 }
 
 type streetExpansion struct {
@@ -262,20 +240,20 @@ type streetExpansion struct {
 	streetNorm string
 }
 
-// rank — сила совпадения улицы для сквозного ранжирования.
+// rank — ранг совпадения улицы для сквозного ранжирования.
 // Когда номер дома извлечён из строки, вся строка уже не совпадает с именем улицы,
-// поэтому ранг считается по streetNorm (без номера): иначе нечёткие админ-зоны с бонусом
+// поэтому ранг считается по streetNorm (без номера): иначе городские админ-зоны
 // вытесняют дома — «14 Полесская» должно находить дом 14, а не село «Полесск».
 func (e *streetExpansion) rank() int {
 	if e.housenumber != nil && e.streetNorm != "" {
 		switch {
 		case e.street.NameNorm == e.streetNorm:
-			return 3*100 + int(e.street.Similarity*10)
+			return 3
 		case strings.HasPrefix(e.street.NameNorm, e.streetNorm+" "):
-			return 2*100 + int(e.street.Similarity*10)
+			return 2
 		}
 	}
-	return streetRank(e.street)
+	return e.street.MatchRank
 }
 
 // resolveExpansion реализует правила разбора: (1) вся строка — улица, если её имя содержит

@@ -63,23 +63,11 @@ type HouseMatch struct {
 	Lon      float64
 }
 
-// ZoneMatch — зона, в которую входит улица.
-type ZoneMatch struct {
-	ID     string
-	Name   string
-	Level  ZoneLevel
-	Kind   ZoneKind
-	AreaM2 int64
-	Lat    float64
-	Lon    float64
-}
-
 // SearchStore — данные для поисковых подсказок.
 type SearchStore interface {
 	Streets(ctx context.Context, nameNorm string, limit int) ([]StreetMatch, error)
 	Areas(ctx context.Context, nameNorm string, limit int) ([]AreaMatch, error)
 	StreetHouses(ctx context.Context, streetOSMID int64, housenumber *string, limit int) ([]HouseMatch, error)
-	StreetZones(ctx context.Context, streetOSMID int64, limit int) ([]ZoneMatch, error)
 }
 
 // AreaRow — строка границы зоны или дома.

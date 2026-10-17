@@ -225,40 +225,6 @@ func (s *PGStore) StreetHouses(ctx context.Context, streetOSMID int64, housenumb
 	return matches, rows.Err()
 }
 
-// StreetZones возвращает зоны, которые пересекает улица.
-func (s *PGStore) StreetZones(ctx context.Context, streetOSMID int64, limit int) ([]ZoneMatch, error) {
-	rows, err := s.pool.Query(ctx, findStreetZonesSQL, pgx.NamedArgs{"osmID": streetOSMID, "limit": limit})
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var matches []ZoneMatch
-	for rows.Next() {
-		var (
-			id       string
-			name     string
-			level    string
-			kind     string
-			areaM2   float64
-			lat, lon float64
-		)
-		if err := rows.Scan(&id, &name, &level, &kind, &areaM2, &lat, &lon); err != nil {
-			return nil, err
-		}
-		matches = append(matches, ZoneMatch{
-			ID:     id,
-			Name:   name,
-			Level:  ZoneLevelFromOSM(level),
-			Kind:   ZoneKindFromOSM(kind),
-			AreaM2: int64(math.Round(areaM2)),
-			Lat:    lat,
-			Lon:    lon,
-		})
-	}
-	return matches, rows.Err()
-}
-
 // FindArea ищет зону (geom_display для отрисовки) или дом (контур).
 func (s *PGStore) FindArea(ctx context.Context, osmType string, osmID int64, exact bool) (*AreaRow, error) {
 	row := s.pool.QueryRow(ctx, findAreaSQL, pgx.NamedArgs{"type": osmType, "osmID": osmID, "exact": exact})
@@ -345,7 +311,19 @@ LEFT JOIN LATERAL (
   WHERE z.level = 'CITY' AND ST_Covers(z.geom, ST_PointOnSurface(s.geom))
   ORDER BY z.area_m2 LIMIT 1
 ) c ON true
-ORDER BY m.match_rank DESC, m.sim DESC, COALESCE(c.area_m2, 0) DESC, s.osm_id
+-- Порядок: точность → масштаб города → похожесть → площадь города → алфавит:
+-- «Советская улица» Минска опережает «Советску улицу» посёлка.
+ORDER BY m.match_rank DESC,
+         CASE
+           WHEN COALESCE(c.area_m2, 0) >= 50000000 THEN 3
+           WHEN COALESCE(c.area_m2, 0) >= 5000000 THEN 2
+           WHEN COALESCE(c.area_m2, 0) > 0 THEN 1
+           ELSE 0
+         END DESC,
+         m.sim DESC,
+         COALESCE(c.area_m2, 0) DESC,
+         s.label,
+         s.osm_id
 LIMIT @limit`
 
 const findAreasSQL = `
@@ -372,13 +350,20 @@ LEFT JOIN LATERAL (
     AND ST_Covers(z2.geom, ST_PointOnSurface(z.geom))
   ORDER BY z2.area_m2 LIMIT 1
 ) p ON true
-ORDER BY m.match_rank DESC, m.sim DESC,
+-- Порядок: точность → масштаб места (район города выше селения даже при лучшей похожести
+-- селения) → похожесть → алфавит и id для стабильности.
+ORDER BY m.match_rank DESC,
          CASE z.level
-           WHEN 'COUNTRY' THEN 1 WHEN 'OBLAST' THEN 2 WHEN 'RAION' THEN 3 WHEN 'CITY' THEN 3
-           WHEN 'CITY_DISTRICT' THEN 4 WHEN 'SETTLEMENT' THEN 4
-           WHEN 'NEIGHBOURHOOD' THEN 5 WHEN 'QUARTER' THEN 5 ELSE 6
-         END,
-         z.area_m2 DESC
+           WHEN 'COUNTRY' THEN 6 WHEN 'OBLAST' THEN 5
+           WHEN 'RAION' THEN 4 WHEN 'CITY' THEN 4
+           WHEN 'CITY_DISTRICT' THEN 3
+           WHEN 'SETTLEMENT' THEN 2
+           WHEN 'NEIGHBOURHOOD' THEN 1 WHEN 'QUARTER' THEN 1
+           ELSE 0
+         END DESC,
+         m.sim DESC,
+         z.label,
+         z.osm_type || z.osm_id
 LIMIT @limit`
 
 const housesSelectSQL = `
@@ -403,16 +388,6 @@ LIMIT @limit`
 
 const housesFirstSQL = housesSelectSQL + `
 ORDER BY (a.osm_type = 'W') DESC, length(a.housenumber), a.housenumber
-LIMIT @limit`
-
-const findStreetZonesSQL = `
-WITH s AS (SELECT geom FROM geo.streets WHERE osm_id = @osmID LIMIT 1)
-SELECT z.osm_type || z.osm_id AS id, z.label AS name, z.level, z.kind,
-       round(z.area_m2) AS area_m2,
-       ST_Y(ST_PointOnSurface(z.geom)) AS lat, ST_X(ST_PointOnSurface(z.geom)) AS lon
-FROM geo.zones z, s
-WHERE ST_Intersects(z.geom, s.geom)
-ORDER BY z.area_m2
 LIMIT @limit`
 
 const findAreaSQL = `
