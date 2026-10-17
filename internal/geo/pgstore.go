@@ -345,7 +345,19 @@ LEFT JOIN LATERAL (
   WHERE z.level = 'CITY' AND ST_Covers(z.geom, ST_PointOnSurface(s.geom))
   ORDER BY z.area_m2 LIMIT 1
 ) c ON true
-ORDER BY m.match_rank DESC, m.sim DESC, COALESCE(c.area_m2, 0) DESC, s.osm_id
+-- Порядок: точность → масштаб города → похожесть → площадь города → алфавит:
+-- «Советская улица» Минска опережает «Советску улицу» посёлка.
+ORDER BY m.match_rank DESC,
+         CASE
+           WHEN COALESCE(c.area_m2, 0) >= 50000000 THEN 3
+           WHEN COALESCE(c.area_m2, 0) >= 5000000 THEN 2
+           WHEN COALESCE(c.area_m2, 0) > 0 THEN 1
+           ELSE 0
+         END DESC,
+         m.sim DESC,
+         COALESCE(c.area_m2, 0) DESC,
+         s.label,
+         s.osm_id
 LIMIT @limit`
 
 const findAreasSQL = `
@@ -372,13 +384,20 @@ LEFT JOIN LATERAL (
     AND ST_Covers(z2.geom, ST_PointOnSurface(z.geom))
   ORDER BY z2.area_m2 LIMIT 1
 ) p ON true
-ORDER BY m.match_rank DESC, m.sim DESC,
+-- Порядок: точность → масштаб места (район города выше селения даже при лучшей похожести
+-- селения) → похожесть → алфавит и id для стабильности.
+ORDER BY m.match_rank DESC,
          CASE z.level
-           WHEN 'COUNTRY' THEN 1 WHEN 'OBLAST' THEN 2 WHEN 'RAION' THEN 3 WHEN 'CITY' THEN 3
-           WHEN 'CITY_DISTRICT' THEN 4 WHEN 'SETTLEMENT' THEN 4
-           WHEN 'NEIGHBOURHOOD' THEN 5 WHEN 'QUARTER' THEN 5 ELSE 6
-         END,
-         z.area_m2 DESC
+           WHEN 'COUNTRY' THEN 6 WHEN 'OBLAST' THEN 5
+           WHEN 'RAION' THEN 4 WHEN 'CITY' THEN 4
+           WHEN 'CITY_DISTRICT' THEN 3
+           WHEN 'SETTLEMENT' THEN 2
+           WHEN 'NEIGHBOURHOOD' THEN 1 WHEN 'QUARTER' THEN 1
+           ELSE 0
+         END DESC,
+         m.sim DESC,
+         z.label,
+         z.osm_type || z.osm_id
 LIMIT @limit`
 
 const housesSelectSQL = `

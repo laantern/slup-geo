@@ -200,7 +200,10 @@ func TestSuggestExactAdminAreaBeforePrefixStreet(t *testing.T) {
 	}
 }
 
-func TestSuggestPrefixRaionBeforeExactStreet(t *testing.T) {
+func TestSuggestExactStreetBeforePrefixRaion(t *testing.T) {
+	// Единый принцип «точность → масштаб»: дома точно совпавшей улицы выше префикс-района
+	// («железнодорожный» → «Железнодорожный переулок» раньше «Железнодорожного района»).
+	// Городской район остаётся сразу за домами — выше селений и микрорайонов.
 	store := &fakeStore{
 		streets: []StreetMatch{streetMatch(1, "железнодорожный", "Железнодорожный переулок", 3)},
 		houses:  []HouseMatch{houseMatch("W1", "1")},
@@ -214,8 +217,63 @@ func TestSuggestPrefixRaionBeforeExactStreet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
-	if len(items) == 0 || items[0].Level != LevelRaion || items[0].Name != "Железнодорожный район" {
-		t.Fatalf("район с бонусом должен быть первым, получено %+v", items)
+	if len(items) < 2 {
+		t.Fatalf("ожидалось минимум 2 подсказки, получено %+v", items)
+	}
+	if items[0].Level != LevelHouse || !strings.HasPrefix(items[0].Name, "Железнодорожный переулок") {
+		t.Fatalf("дома точной улицы должны быть первыми, получено %+v", items[0])
+	}
+	if items[1].Level != LevelRaion || items[1].Name != "Железнодорожный район" {
+		t.Fatalf("район должен идти сразу за домами, получено %+v", items[1])
+	}
+}
+
+func TestSuggestBigCityStreetAboveVillage(t *testing.T) {
+	// Реальный кейс «советск»: дома Советской улицы Минска (совпадение точнее) идут первыми,
+	// за ними Советский район, затем зоны улицы; селения — только в хвосте выдачи.
+	store := &fakeStore{
+		streets: []StreetMatch{{
+			OSMID: 25229483, Label: "Советская улица", NameNorm: "советская",
+			MatchRank: 2, Similarity: 0.636, CityLabel: strPtr("Минск"),
+			Lat: 53.9, Lon: 27.5,
+		}},
+		houses: []HouseMatch{{
+			ID: "W25435139", Number: strPtr("2"), Subtitle: strPtr("Минск, Московский район"),
+			AreaM2: 303, Lat: 53.91, Lon: 27.51,
+		}},
+		streetZones: []ZoneMatch{zoneMatch("W-59208", "Московский район")},
+		areas: []AreaMatch{
+			{
+				ID: "W-3628814", Name: "Советский район", Level: LevelCityDistrict, Kind: KindAdmin,
+				AreaM2: 50_910_791, Subtitle: strPtr("Гомель"), MatchRank: 2, Similarity: 0.412,
+				Lat: 52.42, Lon: 30.94,
+			},
+			{
+				ID: "W-7482498", Name: "Советская", Level: LevelSettlement, Kind: KindAdmin,
+				AreaM2: 172_226, Subtitle: strPtr("Городокский район"), MatchRank: 2, Similarity: 0.636,
+				Lat: 55.67, Lon: 30.56,
+			},
+		},
+	}
+
+	items, err := NewSuggestService(store).Suggest(context.Background(), "советск")
+	if err != nil {
+		t.Fatalf("неожиданная ошибка: %v", err)
+	}
+	if len(items) != 4 {
+		t.Fatalf("подсказок = %d (%+v), ожидалось 4", len(items), items)
+	}
+	if items[0].Level != LevelHouse || items[0].Name != "Советская улица, д. 2" {
+		t.Fatalf("первыми должны быть дома Советской улицы, получено %+v", items[0])
+	}
+	if items[1].Level != LevelCityDistrict || items[1].Name != "Советский район" {
+		t.Fatalf("вторым должен быть Советский район, получено %+v", items[1])
+	}
+	if items[2].Name != "Московский район" {
+		t.Fatalf("третьей должна быть зона улицы, получено %+v", items[2])
+	}
+	if items[3].Level != LevelSettlement {
+		t.Fatalf("селение должно быть в хвосте выдачи, получено %+v", items[3])
 	}
 }
 
