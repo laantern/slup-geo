@@ -38,6 +38,11 @@
   исходников GPL-пакетов, состав tilemaker.
 - **Мелочи.** `/v1/point` не пишет координаты в лог ошибок (как и access-лог); из образа убраны
   неиспользуемые `libboost-iostreams`/`libboost-system`; `TestIsWritable` пропускается под root.
+- **Go 1.27.3 из-за `GO-2026-6809`.** `govulncheck` находит в `crypto/x509` (Go 1.27.2)
+  уязвимость с исправлением в 1.27.3; `go.mod` поднят до неё. Цепочка вызовов до
+  `x509.Certificate.Verify` идёт через `io.Copy` в обёртке access-лога, поэтому проверка
+  сработала на этом изменении. Базовый образ сборки в `Dockerfile` закреплён по digest —
+  обновление диджеста отдельной задачей, версия в нём та же, что и была.
 - **Access-лог не отбирает `sendfile` у тайлов.** Обёртка `statusRecorder` встраивала
   `http.ResponseWriter` как интерфейс и теряла `io.ReaderFrom`, поэтому `http.ServeFile`
   копировал крупные файлы `/tiles/*` через userspace вместо `sendfile`. Добавлены `ReadFrom`
