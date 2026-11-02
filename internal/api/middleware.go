@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -59,4 +60,22 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Unwrap отдаёт нижний ResponseWriter для http.ResponseController: без него
+// обёртка прячет возможности транспорта (Flush, Hijack, дедлайны) от тех, кто их
+// ищет type-assertion'ом. Реализовывать Flush здесь самому нельзя: обёртка тогда
+// обещала бы Flusher и там, где нижний уровень его не умеет.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// ReadFrom сохраняет sendfile: http.ServeFile копирует тело через io.Copy, а тот
+// предпочитает io.ReaderFrom у получателя. Без этого метода крупные файлы тайлов
+// (/tiles/*) копировались бы через userspace вместо sendfile.
+func (r *statusRecorder) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	// Обёртка над writer'ом гасит ReadFrom у самой обёртки — иначе io.Copy вернулся
+	// бы сюда же и ушёл в рекурсию.
+	return io.Copy(struct{ io.Writer }{r.ResponseWriter}, src)
 }

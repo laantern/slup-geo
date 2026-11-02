@@ -38,6 +38,12 @@
   исходников GPL-пакетов, состав tilemaker.
 - **Мелочи.** `/v1/point` не пишет координаты в лог ошибок (как и access-лог); из образа убраны
   неиспользуемые `libboost-iostreams`/`libboost-system`; `TestIsWritable` пропускается под root.
+- **Access-лог не отбирает `sendfile` у тайлов.** Обёртка `statusRecorder` встраивала
+  `http.ResponseWriter` как интерфейс и теряла `io.ReaderFrom`, поэтому `http.ServeFile`
+  копировал крупные файлы `/tiles/*` через userspace вместо `sendfile`. Добавлены `ReadFrom`
+  (делегирование нижнему уровню) и `Unwrap` для `http.ResponseController`: заодно возвращаются
+  `Flush`/`Hijack` тем, кто их ищет. Сама обёртка `Flusher` не притворяется — иначе обещала бы
+  `Flush` там, где транспорт его не умеет.
 - **CI: `govulncheck`.** Go обновлён до `1.27.2` (базовый образ сборки — по новому диджесту):
   в `1.27.0` govulncheck находил уязвимости стандартной библиотеки `net/http` и валил
   обязательный чек `test`.
